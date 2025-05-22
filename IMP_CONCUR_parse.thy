@@ -169,8 +169,12 @@ SYSTEM S
        actions SKIP;
        LOCK 4;
        x = 4;
-      WHILE x DO LOCK 5; UNLOCK 4;DONE
-      IF x THEN SKIP; ELSE SKIP;DONE
+      IF x THEN 
+              WHILE x DO 
+              LOCK 5; 
+              UNLOCK 4;DONE 
+           ELSE
+        SKIP;DONE
   end;
 end;
                 
