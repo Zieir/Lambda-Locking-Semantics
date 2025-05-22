@@ -2,7 +2,7 @@ theory IMP_CONCUR_parse
   imports IMP_CONCUR_MULTI_CSPM
   keywords  "SYSTEM" :: thy_decl
       and   "globals" "locks" "LOCK" "UNLOCK" "thread" "WHILE" "IF" "ELSE" "THEN"
-           "end;" "any" "actions" "DO" "<-" "->" "SKIP"
+           "end;" "any" "actions" "DO" "<-" "->" "SKIP" "DONE"
  
 begin
 
@@ -87,9 +87,9 @@ fun parse_actions TL   =( Scan.repeat1 ( parse_lock
                                   || parse_while 
                                   )) TL
 and  parse_if_else TL = ((\<^keyword>‹IF› |-- Parse.term --| \<^keyword>‹THEN›
-                    -- parse_actions --| \<^keyword>‹ELSE› -- parse_actions--| Parse.$$$ ";")
+                    -- parse_actions --| \<^keyword>‹ELSE› -- parse_actions--| \<^keyword>‹DONE›)
                     >>(fn (x) => Ifelse(x))) TL
-and parse_while TL =(( \<^keyword>‹WHILE› |-- Parse.term --| \<^keyword>‹DO› -- parse_actions --| Parse.$$$ ";")
+and parse_while TL =(( \<^keyword>‹WHILE› |-- Parse.term --| \<^keyword>‹DO› -- parse_actions --|\<^keyword>‹DONE›)
                   >> (fn (x) => While(x))) TL
 
 
@@ -169,7 +169,8 @@ SYSTEM S
        actions SKIP;
        LOCK 4;
        x = 4;
-      (* IF x=5 THEN LOCK 4 ELSE UNLOCK 5;*)
+      WHILE x DO LOCK 5; UNLOCK 4;DONE
+      IF x THEN SKIP; ELSE SKIP;DONE
   end;
 end;
                 
