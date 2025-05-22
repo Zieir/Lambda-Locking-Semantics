@@ -6,9 +6,9 @@ theory IMP_CONCUR_parse
  
 begin
 
-section \<open>Parser and Term-Reading\<close>
+section ‹Parser and Term-Reading›
 
-ML\<open> 
+ML‹ 
 
 val quiet_mode = false
 
@@ -28,9 +28,10 @@ fun map_option f (SOME a) = SOME(f a)
    |map_option _ NONE = NONE
 
 
-(* declaration de variables  v:\<open>N\<close> := \<open>5::int\<close> ou v:<N>*)
+
+(* declaration de variables  v:‹N› := ‹5::int› ou v:<N>*)
 val parse_var_decl = (Parse.binding --| Parse.$$$ ":" -- (Parse.position (Parse.term)))
-                   -- (Scan.option ( Parse.$$$ ":=" |-- Parse.term)) 
+                   -- (Scan.option ( Parse.$$$ "=" |-- Parse.term))
                     : ((binding*(string*Position.T))*string option) parser
 
 (*declarations de locks*)
@@ -59,22 +60,22 @@ datatype a = Skip
             | Ifelse of (string*(a list))*(a list) 
             | While of string*(a list)
 
-val parse_lock = \<^keyword>\<open>LOCK\<close> |-- Parse.binding --| Parse.$$$ ";"
+val parse_lock = \<^keyword>‹LOCK› |-- Parse.binding --| Parse.$$$ ";"
                  >> (fn (x) => Lock(x))
                   : a parser
-val parse_unlock =  \<^keyword>\<open>UNLOCK\<close> |-- Parse.binding --| Parse.$$$ ";"
+val parse_unlock =  \<^keyword>‹UNLOCK› |-- Parse.binding --| Parse.$$$ ";"
                  >>  (fn (x) => Unlock(x))
                   : a parser
-val parse_assign = Parse.binding --| Parse.$$$ ":=" -- Parse.term --| Parse.$$$ ";"
+val parse_assign = Parse.binding --| Parse.$$$ "=" -- Parse.term --| Parse.$$$ ";"
                 >> (fn (x) => Assign(x))
                   : a parser
-val parse_send = Parse.binding --| \<^keyword>\<open>->\<close> -- Parse.term --| Parse.$$$ ";"
+val parse_send = Parse.binding --| \<^keyword>‹->› -- Parse.term --| Parse.$$$ ";"
                  >> (fn (x) => Send(x))
                   : a parser
-val parse_receive = Parse.binding --| \<^keyword>\<open><-\<close> -- Parse.term --| Parse.$$$ ";"
+val parse_receive = Parse.binding --| \<^keyword>‹<-› -- Parse.term --| Parse.$$$ ";"
                 >> (fn (x) => Receive(x))
                   : a parser
-val parse_skip = \<^keyword>\<open>SKIP\<close> |-- Parse.$$$ ";" >> (fn _  => Skip) : a parser
+val parse_skip = \<^keyword>‹SKIP› |-- Parse.$$$ ";" >> (fn _  => Skip) : a parser
 
 fun parse_actions TL   =( Scan.repeat1 ( parse_lock 
                                   || parse_unlock 
@@ -85,10 +86,10 @@ fun parse_actions TL   =( Scan.repeat1 ( parse_lock
                                   || parse_if_else 
                                   || parse_while 
                                   )) TL
-and  parse_if_else TL = ((\<^keyword>\<open>IF\<close> |-- Parse.term --| \<^keyword>\<open>THEN\<close>
-                    -- parse_actions --| \<^keyword>\<open>ELSE\<close> -- parse_actions--| Parse.$$$ ";")
+and  parse_if_else TL = ((\<^keyword>‹IF› |-- Parse.term --| \<^keyword>‹THEN›
+                    -- parse_actions --| \<^keyword>‹ELSE› -- parse_actions--| Parse.$$$ ";")
                     >>(fn (x) => Ifelse(x))) TL
-and parse_while TL =(( \<^keyword>\<open>WHILE\<close> |-- Parse.term --| \<^keyword>\<open>DO\<close> -- parse_actions --| Parse.$$$ ";")
+and parse_while TL =(( \<^keyword>‹WHILE› |-- Parse.term --| \<^keyword>‹DO› -- parse_actions --| Parse.$$$ ";")
                   >> (fn (x) => While(x))) TL
 
 
@@ -103,10 +104,10 @@ and parse_while TL =(( \<^keyword>\<open>WHILE\<close> |-- Parse.term --| \<^key
                        ... ;
                       actionN;
   end; *)
-val parse_threads =( \<^keyword>\<open>thread\<close> |-- (Scan.option (Parse.binding --| Parse.$$$ ":"))
-                                      -- (Scan.option (\<^keyword>\<open>any\<close> |--  Scan.repeat1 (parse_var_decl) ))
-                                     -- (\<^keyword>\<open>actions\<close> |-- parse_actions)
-                                     --| \<^keyword>\<open>end;\<close>)
+val parse_threads =( \<^keyword>‹thread› |-- (Scan.option (Parse.binding --| Parse.$$$ ":"))
+                                      -- (Scan.option (\<^keyword>‹any› |--  Scan.repeat1 (parse_var_decl) ))
+                                     -- (\<^keyword>‹actions› |-- parse_actions)
+                                     --| \<^keyword>‹end;›)
 
 type raw_absy =  (((binding (*system name*)
             *
@@ -122,16 +123,16 @@ type raw_absy =  (((binding (*system name*)
 
 val parse_system_spec = (
           Parse.binding 
-       --| \<^keyword>\<open>globals\<close>    -- (Scan.repeat1 parse_var_decl)
-       --| \<^keyword>\<open>locks\<close>      -- (Scan.repeat1 parse_locks)
+       --| \<^keyword>‹globals›    -- (Scan.repeat1 parse_var_decl)
+       --| \<^keyword>‹locks›      -- (Scan.repeat1 parse_locks)
        -- (Scan.repeat1 parse_threads)
-       --| \<^keyword>\<open>end;\<close>
+       --| \<^keyword>‹end;›
       ) : raw_absy parser
 
 end
-\<close>
+›
 
-ML\<open>
+ML‹
 
 (*effet de bord sur output: imprime x*)
 val context_check = (fn x:raw_absy => fn y => (Toplevel.keep (fn _ => Output.writeln (@{make_string} x));y))
@@ -139,7 +140,7 @@ val context_check = (fn x:raw_absy => fn y => (Toplevel.keep (fn _ => Output.wri
 (*
 val _ =
   Outer_Syntax.command 
-      \<^command_keyword>\<open>SYSTEM\<close>   
+      \<^command_keyword>‹SYSTEM›   
       "defines Event-B Machine Specification"
       (parse_system_spec >> context_check >> (Toplevel.theory o I));
 *)
@@ -147,26 +148,28 @@ val _ =
 
 val _ =
   Outer_Syntax.command
-    \<^command_keyword>\<open>SYSTEM\<close>
+    \<^command_keyword>‹SYSTEM›
     "defines Event-B Machine Specification"
     (parse_system_spec >> (fn x =>
       (Output.writeln (@{make_string} x); Toplevel.theory I)));
 
 
-\<close>
+›
 
 
 SYSTEM S
-  globals v:\<open>N\<close>
-  locks   l:\<open>()\<close>
+  globals v:‹N›= 4 x:‹K›
+  locks   l:‹()›
   thread t :
-       any var_local:\<open>()\<close>
+       any var_local:‹()›
        actions SKIP; LOCK 4;
+        v->5;
   end;
   thread tu :
        actions SKIP;
        LOCK 4;
-       IF x=5 THEN LOCK 4 ELSE UNLOCK 5;
+       x = 4;
+      (* IF x=5 THEN LOCK 4 ELSE UNLOCK 5;*)
   end;
 end;
                 
