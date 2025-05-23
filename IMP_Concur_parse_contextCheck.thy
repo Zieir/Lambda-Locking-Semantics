@@ -305,8 +305,9 @@ val _ =
         let
           val _ = Output.writeln "=== PARSED SYSTEM ==="
           val _ = Output.writeln (@{make_string} x)
-          val _ = Output.writeln "=== TYPE CHECKING ==="
+          val _ = Output.writeln "=== CONTEXT CHECKING ==="
           val checked = context_check x thy
+          val _ = Output.writeln (@{make_string} checked)
         in
           thy
         end)))
@@ -315,7 +316,8 @@ SYSTEM WellTypedSys
   globals v:‹int› = ‹4 › x:‹bool set› = True
   locks   l:‹unit set›                                       
   thread t1 :
-       actions 
+         any var1:‹int› = 4      
+         actions 
          SKIP;
          LOCK l;
          v -> 7;
@@ -332,19 +334,19 @@ SYSTEM WellTypedSys
 end;
 
 SYSTEM S
-  globals v:‹int›= 4
-  locks   l: l                                       
-  thread t :
+  globals v :nat= ‹4›
+  locks   l: nat
+  (*thread t :
        any var_local:‹()›
        actions SKIP; LOCK 4;
         v->5;
-  end;
-  thread l :
-       any var_local:‹()›
+  end;*)
+  thread m:
+       any var_local :int = ‹4›
        actions SKIP;
-       LOCK 4;      
-       x = ‹42+3/8›;
-      IF x THEN 
+       LOCK 4;
+       x = ‹(4+5) :: int›;
+      IF m THEN 
               WHILE x DO 
               LOCK 5; 
               UNLOCK 4;DONE 
