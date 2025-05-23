@@ -157,14 +157,14 @@ type absy = {system          : binding,
 val SPY = Unsynchronized.ref(NONE:absy option)
 val SPYG= Unsynchronized.ref([Bound 0])
 
-fun pre_const ((b, trm), _) = (b,  (HOLogic.dest_setT o fastype_of) trm, Mixfix.NoSyn) 
-fun pre_const' (b, trm) = (b,  (HOLogic.dest_setT o fastype_of) trm, Mixfix.NoSyn) 
+fun pre_const ((b, trm), _) = (b,  fastype_of trm, Mixfix.NoSyn) 
+fun pre_const' (b, trm) = (b,   fastype_of trm, Mixfix.NoSyn) 
 fun pre_const_bar (b, trm, _) = (Binding.suffix_name "'" b,  
-                                  (HOLogic.dest_setT o fastype_of) trm, Mixfix.NoSyn) 
-fun pre_const2 (b, trm, _, _) = (b,  (HOLogic.dest_setT o fastype_of) trm, Mixfix.NoSyn) 
-fun pre_const3 (b, trm, _) = (b,  (HOLogic.dest_setT o fastype_of) trm, Mixfix.NoSyn) 
+                                  fastype_of trm, Mixfix.NoSyn) 
+fun pre_const2 (b, trm, _, _) = (b,  fastype_of trm, Mixfix.NoSyn) 
+fun pre_const3 (b, trm, _) = (b, fastype_of trm, Mixfix.NoSyn) 
 
-fun pre_event (b, trm, _) = (b,  (HOLogic.dest_setT o fastype_of) trm --> pre_event_type, 
+fun pre_event (b, trm, _) = (b, fastype_of trm --> pre_event_type, 
                                    Mixfix.NoSyn)  
 
 
@@ -177,21 +177,15 @@ fun read_term_err thy msg bind str =
              handle ERROR s => error("error in "^msg^" :"^ pos ^"\n"^ s ) ) 
         end
 
-(*      (*
-       fun actions_conv (Assign (bdg,str)) = (AssignA(bdg, read_term_err thy "variable type" bdg str ))
-           |  actions_conv (Skip) = (SkipA)
-           |  actions_conv (Lock x) = (LockA x)
-           |  actions_conv (Unlock x) = (UnlockA x)
-           |  actions_conv (Send (bdg, str)) = (SendA(bdg, read_term_err thy "variable type" bdg str ))
-           |  actions_conv (Receive (bdg, str)) = (ReceiveA(bdg, read_term_err thy "variable type" bdg str ))
-           |  actions_conv (Ifelse ((str, iflist),thenlist)) = 
-                                  (IfelseA (((read_term_err thy "variable type" bdg str, actions_conv iflist),actions_conv thenlist)))
-*)*)
+fun read_term_err_pos thy msg bind str pos = 
+        (Syntax.read_term_global thy str
+             handle ERROR s => error("error in "^msg^" :"^ (Position.here pos) ^"\n"^ s ) ) 
+        
 fun check_thread thy thy3 (((SOME thread_name, SOME locals_list) , actions_list): raw_thread_absy) =
     let fun loc_decls_conv ((bdg, (s, pos)), SOME init_str) =
             let 
-              val typ_term = read_term_err thy "variable type" bdg s
-              val init_term = read_term_err thy "initial value" bdg init_str
+              val typ_term = read_term_err_pos thy "variable type" bdg s pos
+              val init_term = read_term_err_pos thy "initial value" bdg init_str pos
             in
               ((bdg, typ_term), SOME init_term)
             end
@@ -281,28 +275,18 @@ val context_check = fn (((system: binding ,
 
 
 
-(*                         fun read2 b str = read_term_err thy' "invariant" 
-                                                         (map_opt I Binding.empty b) str
-                         val lab_invs'   = map (fn (b, str) => (b, read2 b str)) lab_invs
-                         val thy''       = thy' |> Sign.add_consts (map pre_event event_decls')
-                                                |> Sign.add_consts (map pre_const_bar vars_decls')
-*)
-
-
-
-
 
 
 section‹Impression›
 ML‹
-
+(*
 val _ =
   Outer_Syntax.command 
       \<^command_keyword>‹SYSTEM›   
       "defines Event-B Machine Specification"
       (parse_system_spec >> context_check >> (Toplevel.theory o (K I)));
 
-
+*)
 (*
 val _ =
   Outer_Syntax.command
@@ -310,22 +294,56 @@ val _ =
     "defines Event-B Machine Specification"
     (parse_system_spec >> (fn x =>
       (Output.writeln (@{make_string} x); Toplevel.theory I)));
-
 *)
+
+val _ =
+  Outer_Syntax.command
+    \<^command_keyword>‹SYSTEM›
+    "defines Event-B Machine Specification"
+    (parse_system_spec >> (fn x =>
+      Toplevel.theory (fn thy =>
+        let
+          val _ = Output.writeln "=== PARSED SYSTEM ==="
+          val _ = Output.writeln (@{make_string} x)
+          val _ = Output.writeln "=== TYPE CHECKING ==="
+          val checked = context_check x thy
+        in
+          thy
+        end)))
 ›
+SYSTEM WellTypedSys
+  globals v:‹int› = ‹4 › x:‹bool set› = True
+  locks   l:‹unit set›                                       
+  thread t1 :
+       actions 
+         SKIP;
+         LOCK l;
+         v -> 7;
+         UNLOCK l;
+         IF x THEN 
+            WHILE x DO 
+              LOCK l; 
+              UNLOCK l;
+            DONE 
+         ELSE
+            SKIP;
+         DONE
+  end;
+end;
+
 SYSTEM S
-  globals v:‹N›= 4 x:‹K› = True
-  locks   l:‹()›                                       
+  globals v:‹int›= 4
+  locks   l: l                                       
   thread t :
        any var_local:‹()›
        actions SKIP; LOCK 4;
         v->5;
   end;
-  thread :
+  thread l :
        any var_local:‹()›
        actions SKIP;
-       LOCK 4;
-       x = ‹"4+5"›;
+       LOCK 4;      
+       x = ‹42+3/8›;
       IF x THEN 
               WHILE x DO 
               LOCK 5; 
@@ -334,5 +352,6 @@ SYSTEM S
         SKIP;DONE
   end;
 end;
+
                 
 end
