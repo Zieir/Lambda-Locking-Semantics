@@ -44,7 +44,7 @@ datatype a = Skip
             | Unlock of binding 
             | Lock of binding
             | Send of binding*string 
-            | Receive of binding*string
+            | Receive of binding*binding
             | Ifelse of (string*(a list))*(a list) 
             | While of string*(a list)
 
@@ -60,7 +60,7 @@ val parse_assign = Parse.binding --| Parse.$$$ "=" -- Parse.term --| Parse.$$$ "
 val parse_send = Parse.binding --| \<^keyword>‹->› -- Parse.term --| Parse.$$$ ";"
                  >> (fn (x) => Send(x))
                   : a parser
-val parse_receive = Parse.binding --| \<^keyword>‹<-› -- Parse.term --| Parse.$$$ ";"
+val parse_receive = Parse.binding --| \<^keyword>‹<-› -- Parse.binding --| Parse.$$$ ";"
                 >> (fn (x) => Receive(x))
                   : a parser
 val parse_skip = \<^keyword>‹SKIP› |-- Parse.$$$ ";"
@@ -138,7 +138,7 @@ datatype a_term = SkipA
             | UnlockA of binding 
             | LockA of binding
             | SendA of binding*term 
-            | ReceiveA of binding*term
+            | ReceiveA of binding*binding
             | IfelseA of (term*(a_term list))*(a_term list) 
             | WhileA of term*(a_term list)
 
@@ -169,6 +169,8 @@ fun pre_event (b, trm, _) = (b, fastype_of trm --> pre_event_type,
                                    Mixfix.NoSyn)  
 
 
+(* Got replaced but would be cool to know why isn't it working
+
 fun check_vars term varstab locstab =
   let
     val vars = Term.add_free_names term []
@@ -177,7 +179,7 @@ fun check_vars term varstab locstab =
   in
     if null undeclared then ()
     else error ("Undeclared variable(s) used: " ^ String.concatWith ", " undeclared)
-  end
+  end*)
 
 
 fun read_term_err thy msg bind str = 
@@ -189,7 +191,42 @@ fun read_term_err thy msg bind str =
 fun read_term_err_pos thy msg _ str pos = 
         (Syntax.read_term_global thy str
              handle ERROR s => error("error in "^msg^" :"^ (Position.here pos) ^"\n"^ s ) ) 
-        
+
+(* Utilitaire pour lire un terme à partir d’une string *)
+fun get_term_and_vars thy str =
+  let
+    val term = Syntax.read_term_global thy str
+    val vars = Term.add_free_names term []
+  in
+    (term, vars)
+  end
+
+(* Résout une variable selon priorité locale ou globale *)
+fun resolve_var prefer_global var locstab varstab =
+  let
+    val loc = Symtab.lookup locstab var
+    val global = Symtab.lookup varstab var
+  in
+    if prefer_global then
+      (case global of
+         SOME (SOME t) => SOME t
+       | _ => (case loc of
+                 SOME (SOME t) => SOME t
+               | _ => NONE))
+    else
+      (case loc of
+         SOME (SOME t) => SOME t
+       | _ => (case global of
+                 SOME (SOME t) => SOME t
+               | _ => NONE))
+  end
+
+(* Variante stricte qui renvoie une erreur si non trouvé *)
+fun resolve_var_strict prefer_global var locstab varstab =
+  case resolve_var prefer_global var locstab varstab of
+    SOME t => t
+  | NONE => error ("Variable "^var^" non déclarée")
+
 fun check_thread thy thy3 vars_tab (((SOME thread_name, locals_opt), actions_list): raw_thread_absy) =
   let
     fun loc_decls_conv ((bdg, (s, pos)), SOME init_term) =
@@ -202,70 +239,103 @@ fun check_thread thy thy3 vars_tab (((SOME thread_name, locals_opt), actions_lis
           in
             if inferred_type <> typ then
               error ("Type mismatch in variable " ^ Binding.name_of bdg ^
-                     ": expected " ^ declared_str ^ ", but got " ^ inferred_str)
+                     ": expected " ^ declared_str ^ ", but got " ^ inferred_str ^ "at " ^ Position.here pos )
             else
               ((bdg, typ), SOME init_term)
           end
         | loc_decls_conv ((bdg, (s, pos)), NONE) =
           ((bdg, Syntax.read_typ_global thy s), NONE)
 
-    fun action_conv varstab locstab Skip = SkipA
-      | action_conv varstab locstab (Assign (bdg, str)) =
-          let
-            val term = read_term_err thy "assignment" bdg str
-            val _ = check_vars term varstab locstab
-            val var_name = Binding.name_of bdg
-            val _ = if Symtab.defined varstab var_name orelse Symtab.defined locstab var_name
-                    then ()
-                    else error ("Undeclared variable assigned: " ^ var_name)
-          in AssignA (bdg, term) end
+    fun action_conv _ _ Skip = SkipA
       | action_conv _ _ (Lock b) = LockA b
       | action_conv _ _ (Unlock b) = UnlockA b
+      | action_conv varstab locstab (Assign (bdg, str)) =
+           let
+              val (term, vars) = get_term_and_vars thy str
+              val assign_term =
+                case vars of
+                  [y] => resolve_var_strict false y locstab varstab
+                | _ => term
+             val _ =
+              if Symtab.defined locstab (Binding.name_of bdg) 
+                 orelse Symtab.defined varstab (Binding.name_of bdg)
+              then ()
+              else error ("Variable " ^ (Binding.name_of bdg) ^ " is not declared (in assign binding)")
+            in
+              AssignA (bdg, assign_term)
+            end
+
+
       | action_conv varstab locstab (Send (b, str)) =
-          let
-            val term = read_term_err thy "send value" b str
-            val _ = check_vars term varstab locstab
-          in SendA (b, term) end
-      | action_conv varstab locstab (Receive (b, str)) =
-          let
-            val term = read_term_err thy "receive value" b str
-            val _ = check_vars term varstab locstab
-          in ReceiveA (b, term) end
+        let
+          val (term, vars) = get_term_and_vars thy str
+          val send_term =
+            case vars of
+              [x] => resolve_var_strict true x locstab varstab
+            | _ => term
+           val _ =
+              if Symtab.defined locstab (Binding.name_of b) 
+                 orelse Symtab.defined varstab (Binding.name_of b)
+              then ()
+              else error ("Variable " ^ (Binding.name_of b) ^ " is not declared (in assign binding)")
+        in
+          SendA (b, send_term)
+        end
+
+      | action_conv varstab locstab (Receive (blv, bsv)) =
+        let
+           val _ =
+              if Symtab.defined locstab (Binding.name_of blv)
+                 then   if (Symtab.defined varstab (Binding.name_of bsv)) then ()
+                        else error ("Variable " ^ (Binding.name_of bsv) ^ " is not declared (in receive binding)")
+              else error ("Variable " ^ (Binding.name_of blv) ^ " is not declared (in receive binding)")
+        in
+          ReceiveA (blv, bsv)
+        end
+
       | action_conv varstab locstab (Ifelse ((cond_str, then_branch), else_branch)) =
           let
-            val cond_term = read_term_err thy "if condition" (Binding.name "if_cond") cond_str
-            val _ = check_vars cond_term varstab locstab
-            val then_branch' = map (action_conv varstab locstab) then_branch
-            val else_branch' = map (action_conv varstab locstab) else_branch
-          in
-            IfelseA ((cond_term, then_branch'), else_branch')
-          end
+          val (term, vars) = get_term_and_vars thy cond_str
+          val cond_term =
+            case vars of
+              [x] => resolve_var_strict false x locstab varstab
+            | _ => term
+          val then_branch' = map (action_conv varstab locstab) then_branch
+          val else_branch' = map (action_conv varstab locstab) else_branch
+        in
+          IfelseA ((cond_term, then_branch'), else_branch')
+        end
+
       | action_conv varstab locstab (While (cond_str, body)) =
           let
-            val cond_term = read_term_err thy "while condition" (Binding.name "while_cond") cond_str
-            val _ = check_vars cond_term varstab locstab
-            val body' = map (action_conv varstab locstab) body
+            val (term, vars) = get_term_and_vars thy cond_str
+            val cond_term =
+              case vars of
+                [x] => resolve_var_strict false x locstab varstab
+              | _ => term
+            val actions = map (action_conv varstab locstab) body
           in
-            WhileA (cond_term, body')
+            WhileA (cond_term, actions)
           end
-          val (loc_decls', thy3') = case locals_opt of
-              NONE => ([], thy3)
-            | SOME locals =>
-                let
-                  val locals_terms = map (fn ((bdg,(s,pos)), init_opt_str) =>
-                     let
-                       val init_opt_term = case init_opt_str of
-                           NONE => NONE
-                         | SOME str => SOME (read_term_err thy "local init" bdg str)
-                     in
-                       ((bdg, (s,pos)), init_opt_term)
-                     end) locals
-          
-                  val decls = map loc_decls_conv locals_terms
-                  val thy4 = Sign.add_consts (map pre_const decls) thy3
-                in
-                  (decls, thy4)
-                end
+
+    val (loc_decls', thy3') = case locals_opt of
+        NONE => ([], thy3)
+      | SOME locals =>
+          let
+            val locals_terms = map (fn ((bdg,(s,pos)), init_opt_str) =>
+               let
+                 val init_opt_term = case init_opt_str of
+                     NONE => NONE
+                   | SOME str => SOME (read_term_err thy "local init" bdg str)
+               in
+                 ((bdg, (s,pos)), init_opt_term)
+               end) locals
+    
+            val decls = map loc_decls_conv locals_terms
+            val thy4 = Sign.add_consts (map pre_const decls) thy3
+          in
+            (decls, thy4)
+          end
 
     fun conv_decl_init ((n, _), init_opt) = (Binding.name_of n, init_opt)
     val locstab'     = Symtab.make (map conv_decl_init loc_decls')
@@ -273,7 +343,7 @@ fun check_thread thy thy3 vars_tab (((SOME thread_name, locals_opt), actions_lis
     { nom_thread = thread_name, locals_decl = loc_decls', actions = actions', locstab = locstab' }
   end
   | check_thread _ _ _ ((NONE, _), _) =
-      error "Current syntax restriction: event must have label."
+      error "Current syntax restriction: threads must have label."
 
 
 
@@ -295,7 +365,8 @@ val context_check = fn (((system: binding ,
                             in
                               if inferred_type <> typ then
                                 error ("Type mismatch in variable " ^ Binding.name_of bdg ^
-                                       ": expected " ^ declared_str ^ ", but got " ^ inferred_str)
+                                       ": expected " ^ declared_str ^ ", but got " ^ inferred_str ^  
+                                       "at " ^Position.here pos)
                               else
                                 (bdg, typ, pos, SOME init_term)
                             end
@@ -318,13 +389,6 @@ val context_check = fn (((system: binding ,
                                     (decls, thy4)
                                   end
 
-
-                        (* val global_decls' =  map (fn ((b, (str,pos)), init) =>(
-                                                     if init = NONE then
-                                                          (b ,read "var_type" b str ,pos ,NONE)  
-                                                     else 
-                                                          (b ,read "var_type" b str ,pos ,SOME(read "var_init" b (the init)))  
-                                                    )) globals;*)
                          fun conv_decl_init (n,_, _  , init_opt) = (Binding.name_of n, init_opt)
                          val varstab     = Symtab.make (map conv_decl_init global_decls')
                          val lock_decls'= map (fn (b, (str,pos)) => (b, read "lock_decl" b str, pos)) locks
@@ -359,7 +423,7 @@ ML‹
 val _ =
   Outer_Syntax.command 
       \<^command_keyword>‹SYSTEM›   
-      "defines Event-B Machine Specification"
+      "defines System Specification"
       (parse_system_spec >> context_check >> (Toplevel.theory o (K I)));
 
 *)
@@ -367,7 +431,7 @@ val _ =
 val _ =
   Outer_Syntax.command
     \<^command_keyword>‹SYSTEM›           
-    "defines Event-B Machine Specification"
+    "defines System Specification"
     (parse_system_spec >> (fn x =>
       (Output.writeln (@{make_string} x); Toplevel.theory I)));
 *)
@@ -375,7 +439,7 @@ val _ =
 val _ =
   Outer_Syntax.command
     \<^command_keyword>‹SYSTEM›
-    "defines Event-B Machine Specification"
+    "defines System Specification"
     (parse_system_spec >> (fn x =>
       Toplevel.theory (fn thy =>
         let
@@ -394,12 +458,13 @@ SYSTEM WellTypedSys
   globals v:‹bool› = ‹True› x:‹bool› = False
   locks   l:‹()›                                       
   thread t1 :
-         any var1:‹nat› = ‹4 :: nat›      
+         any var1:‹nat› = ‹4 :: nat›
          actions 
          SKIP;
          LOCK l;
-         y -> 7;
+         x = x;
          UNLOCK l;
+          x -> x;
          IF x THEN 
             WHILE x DO 
               LOCK l; 
@@ -423,7 +488,7 @@ SYSTEM S
        any var_local :int = ‹4 :: int›
        actions SKIP;
        LOCK 4;
-       test = ‹(4+5) :: int›;
+       var_local = ‹(4+5) :: int›;
       IF ‹4+5 == 4› THEN 
               WHILE v DO 
               LOCK 5; 
@@ -432,6 +497,4 @@ SYSTEM S
         SKIP;DONE
   end;
 end;
-
-                
 end
