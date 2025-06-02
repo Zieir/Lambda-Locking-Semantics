@@ -253,10 +253,7 @@ fun check_thread thy thy3 vars_tab (((SOME thread_name, locals_opt), actions_lis
       | action_conv varstab locstab (Assign (bdg, str)) =
            let
               val (term, vars) = get_term_and_vars thy str
-              val assign_term =
-                case vars of
-                  [y] => resolve_var_strict false y locstab varstab
-                | _ => term
+              val assign_term = term
              val _ =
               if Symtab.defined locstab (Binding.name_of bdg) 
                  orelse Symtab.defined varstab (Binding.name_of bdg)
@@ -297,10 +294,7 @@ fun check_thread thy thy3 vars_tab (((SOME thread_name, locals_opt), actions_lis
       | action_conv varstab locstab (Ifelse ((cond_str, then_branch), else_branch)) =
           let
           val (term, vars) = get_term_and_vars thy cond_str
-          val cond_term =
-            case vars of
-              [x] => resolve_var_strict false x locstab varstab
-            | _ => term
+          val cond_term = term
           val then_branch' = map (action_conv varstab locstab) then_branch
           val else_branch' = map (action_conv varstab locstab) else_branch
         in
@@ -525,7 +519,14 @@ fun convert_to_com (thy : theory) (actions : a_term list)
       case action of
         SkipA => SKIP
       | AssignA (bdg, term) => 
-          Assign (Binding.name_of bdg, term_to_arith_expr term)
+        let
+          val name = Binding.name_of bdg
+          val is_local = Symtab.defined locstab name
+        in
+          if is_local
+          then Assign (name, term_to_arith_expr term)  (* local *)
+          else Store (term_to_arith_expr term, name)   (* global *)
+    end
       | LockA bdg => 
           Lock (Binding.name_of bdg)
       | UnlockA bdg => 
@@ -595,16 +596,21 @@ fun sem_cps SKIP cont =
       (fn state => UnlockEvent (id, get_lock_id id) :: cont state)
 
   | sem_cps (Store (e, x)) cont =
-      (fn state =>
-        let val v = e state in
-          UpdateEvent (x, v) :: cont state
-        end)
-
+    (fn state =>
+      let
+        val v = e state
+        val new_state = update_state state x v
+      in
+        UpdateEvent (x, v) :: cont new_state
+      end)
   | sem_cps (Load (x, y)) cont =
-      (fn state =>
-        let val v = 0 (* valeur lue simulée *) in
-          ReadEvent (y, v) :: cont (update_state state x v)
-        end)
+    (fn state =>
+      let
+        val v = state y
+        val new_state = update_state state x v
+      in
+        ReadEvent (y, v) :: cont new_state
+      end)
 type csp_trace = csp_event list
 
 (* Fonction Sem adaptée avec gestion des événements CSP *)
@@ -645,12 +651,13 @@ fun sem_step (thy : theory) (cmd : com) (cont : state * csp_trace -> state * csp
         cont (s, new_trace)
       end
   | Store (expr, var) =>
-      let
-        val value = expr s
-        val new_trace = UpdateEvent (var, value) :: trace
-      in
-        cont (s, new_trace)
-      end
+    let
+      val value = expr s
+      val new_state = update_state s var value
+      val new_trace = UpdateEvent (var, value) :: trace
+    in
+      cont (new_state, new_trace)
+    end
   | Load (local_var, global_var) =>
       let
         (* Simulation : on lit la valeur 0 par défaut *)
@@ -985,11 +992,68 @@ fun generate_csp_code (absy_data : absy) : string =
       end
 
     (* Conversion d'une action en CSP *)
-    fun action_to_csp action =
+fun action_to_csp action state =
+  case action of
+      SkipA => ("SKIP", state)
+    | LockA bdg => ("lock_" ^ Binding.name_of bdg ^ "!0", state)
+    | UnlockA bdg => ("unlock_" ^ Binding.name_of bdg ^ "!0", state)
+    | SendA (bdg, term) =>
+        let
+          val v = eval_term_to_int @{theory} term state
+          val new_state = update_state state (Binding.name_of bdg) v
+        in
+          ("update_" ^ Binding.name_of bdg ^ "!" ^ Int.toString v, new_state)
+        end
+    | ReceiveA (bdg, _) =>
+        let
+          val new_state = update_state state (Binding.name_of bdg) 0
+        in
+          ("read_" ^ Binding.name_of bdg ^ "?x", new_state)
+        end
+    | AssignA (bdg, term) =>
+        let
+          val name = Binding.name_of bdg
+          val typ = fastype_of term
+          val v = if typ = @{typ bool}
+                  then if eval_term_to_bool @{theory} term state then 1 else 0
+                  else eval_term_to_int @{theory} term state
+          val new_state = update_state state name v
+        in
+          ("update_" ^ name ^ "!" ^ Int.toString v, new_state)
+        end
+    | IfelseA ((cond, a1), a2) =>
+        let
+          val b = eval_term_to_bool @{theory} cond state
+          val val_str = if b then "true" else "false"
+          val (then_code, _) = action_list_to_csp a1 state
+          val (else_code, _) = action_list_to_csp a2 state
+        in
+          ("( (" ^ val_str ^ "→" ^ then_code ^ ") [] (¬" ^ val_str ^ "→" ^ else_code ^ ") )", state)
+        end  
+    | WhileA (cond, body) =>
+        let
+          val (body_code, _) = action_list_to_csp body state
+        in
+          ("µ X. " ^ body_code ^ " -> X", state)
+        end
+    | SeqA (a1, a2) =>
+        let
+          val (s1, state1) = action_to_csp a1 state
+          val (s2, state2) = action_to_csp a2 state1
+        in
+          (s1 ^ "→" ^ s2, state2)
+        end
+and action_list_to_csp [] state = ("SKIP", state)
+  | action_list_to_csp [a] state = action_to_csp a state
+  | action_list_to_csp (a::rest) state =
+      let
+        val (s1, state1) = action_to_csp a state
+        val (s2, state2) = action_list_to_csp rest state1
+      in
+        (s1 ^ "→" ^ s2, state2)
+      end
+    (*fun action_to_csp action =
       case action of
-          SkipA => " SKIP"
-        | LockA bdg => "lock_" ^ Binding.name_of bdg ^ "!0"
-        | UnlockA bdg => "unlock_" ^ Binding.name_of bdg ^ "!0 "
         | SendA (bdg, term) =>
             let
               val val_str = Int.toString (eval_term_to_int @{theory} term (fn _ => 0))
@@ -1019,15 +1083,15 @@ fun generate_csp_code (absy_data : absy) : string =
             end
         |SeqA (A1,A2) => action_to_csp A1 ^ "→" ^ action_to_csp A2
         | _ => raise Fail "Unhandled a_term in action_to_csp"
-
+*)
     (* Conversion d’un thread vers CSP *)
         fun thread_to_csp (thread : thread_absy) : string =
             let
               val {nom_thread, actions, ...} = thread
               val thread_name = Binding.name_of nom_thread
-              val combined_actions = sequence_actions actions
-            in
-              thread_name ^ " = " ^ action_to_csp combined_actions
+              val (code, _) = action_list_to_csp actions (fn _ => 0)
+           in
+              thread_name ^ " = " ^ code 
             end
 
     (* Combiner tous les threads *)
@@ -1173,9 +1237,9 @@ thread t2 :
          DONE
   end;
 end;
-(*
+
 SYSTEM S
-  globals v :nat= ‹4::nat› x :bool = True
+  globals v :nat= ‹4::nat› x :bool = False
   locks   l: nat
   (*thread t :
        any var_local:‹()›
@@ -1183,18 +1247,21 @@ SYSTEM S
         v->5;
   end;*)
   thread m:
-       any var_local :int = ‹4 :: int›
+       any var_local :int = ‹4 :: int›  test : int = ‹-3 ::int›
        actions SKIP;
        var_local = ‹(4+5) :: int›;
+      x = True;
+      test = ‹2* var_local›;
+      test = ‹test+3›;
       IF ‹x› THEN 
                   WHILE x DO 
-SKIP;
+                    SKIP;
                   DONE 
                ELSE
                   SKIP;
                DONE
 
   end;
-end;*)
+end;
 
 end
