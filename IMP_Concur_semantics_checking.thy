@@ -781,47 +781,118 @@ fun detect_race_conditions (threads : thread_absy list) : string list =
   end
 
 (* Vérification de cohérence des types *)
-(*fun type_check_thread (thy : theory) (thread : thread_absy) : string list =
+fun type_check_thread (thy : theory) (thread : thread_absy) (varstab) : string list =
   let
     val {nom_thread, locals_decl, actions, locstab} = thread
-    
-    fun check_action_types action errors =
-      case action of
+
+    fun check_action_types (action, errors) =      case action of
         AssignA (bdg, term) =>
           let
             val var_name = Binding.name_of bdg
             val term_type = fastype_of term
+            val expected_type =
+              case Symtab.lookup locstab var_name of
+                SOME (SOME t) => fastype_of t
+              | SOME NONE => error ("Variable " ^ var_name ^ " declared but has no initial value")
+              | NONE =>  error ("Variable " ^ var_name ^ " is not localy declared")
           in
-            (* Vérifier que le type du terme correspond au type de la variable *)
-            if Term.is_Type term_type then errors
-            else ("Type mismatch in assignment to " ^ var_name) :: errors
+            if term_type = expected_type then
+              errors
+            else
+              ("Type mismatch in assignment to " ^ var_name ^
+               ": expected " ^ Syntax.string_of_typ_global thy expected_type ^
+               ", got " ^ Syntax.string_of_typ_global thy term_type) :: errors
           end
+
       | SendA (bdg, term) =>
           let
             val var_name = Binding.name_of bdg
             val term_type = fastype_of term
+            val expected_type =
+              case Symtab.lookup varstab var_name of
+                SOME (SOME t) => fastype_of t
+              | SOME NONE => error ("Variable " ^ var_name ^ " declared but has no initial value")
+              | NONE => error ("Variable " ^ var_name ^ " is not declared")
           in
-            errors (* Simplifié pour l'exemple *)
+            if term_type = expected_type then
+              errors
+            else
+              ("Type mismatch in send to " ^ var_name ^
+               ": expected " ^ Syntax.string_of_typ_global thy expected_type ^
+               ", got " ^ Syntax.string_of_typ_global thy term_type) :: errors
           end
-      | IfelseA ((cond_term, then_actions), else_actions) =>
+
+      | ReceiveA (local_bdg, shared_bdg) =>
           let
-            val cond_type = fastype_of cond_term
-            val then_errors = List.foldl check_action_types [] then_actions
-            val else_errors = List.foldl check_action_types [] else_actions
+            val local_var = Binding.name_of local_bdg
+            val shared_var = Binding.name_of shared_bdg
+            val local_type =
+              case Symtab.lookup locstab local_var of
+                SOME (SOME t) => fastype_of t
+              | SOME NONE => error ("Variable " ^ local_var ^ " declared but has no initial value")
+              | NONE => error ("Local variable " ^ local_var ^ " not declared")
+
+            val shared_type =
+              case Symtab.lookup varstab shared_var of
+                SOME (SOME t) => fastype_of t
+              | NONE =>
+                case Symtab.lookup (!SPY |> Option.valOf |> #varstab) shared_var of
+                  SOME (SOME t) => fastype_of t
+                | _ => error ("Shared variable " ^ shared_var ^ " not declared")
+              | SOME NONE => error ("Variable " ^ shared_var ^ " declared but has no initial value")
           in
-            then_errors @ else_errors @ errors
+            if local_type = shared_type then errors
+            else
+              ("Type mismatch in receive: cannot assign " ^ shared_var ^ " to " ^ local_var ^
+               " (expected " ^ Syntax.string_of_typ_global thy local_type ^
+               ", got " ^ Syntax.string_of_typ_global thy shared_type ^ ")") :: errors
           end
-      | WhileA (cond_term, body_actions) =>
+
+      | IfelseA ((cond, then_branch), else_branch) =>
+        let
+          val cond_type =
+            let
+              val t = cond
+            in
+              case cond of
+                Free (x, _) =>
+                  (case Symtab.lookup locstab x of
+                     SOME (SOME t') => fastype_of t'
+                   | SOME NONE => error ("Variable " ^ x ^ " declared but has no initial value")
+                   | NONE =>
+                       (case Symtab.lookup (!SPY |> Option.valOf |> #varstab) x of
+                          SOME (SOME t') => fastype_of t'
+                        | SOME NONE => error ("Global variable " ^ x ^ " declared but has no initial value")
+                        | NONE => fastype_of t))  (* fallback to actual term type *)
+              | _ => fastype_of t
+            end
+    
+          val cond_error =
+            if cond_type = @{typ bool} then []
+            else ["Condition must be boolean, got: " ^ Syntax.string_of_typ_global thy cond_type]
+    
+          val then_errors = List.foldl check_action_types [] then_branch
+          val else_errors = List.foldl check_action_types [] else_branch
+        in
+          cond_error @ then_errors @ else_errors @ errors
+        end
+
+      | WhileA (cond, body) =>
           let
-            val cond_type = fastype_of cond_term
-            val body_errors = List.foldl check_action_types [] body_actions
+            val cond_type = fastype_of cond
+            val cond_error =
+              if cond_type = @{typ bool} then []
+              else ["While condition must be boolean, got: " ^ Syntax.string_of_typ_global thy cond_type]
+            val body_errors = List.foldl check_action_types [] body
           in
-            body_errors @ errors
+            cond_error @ body_errors @ errors
           end
+
       | _ => errors
+
   in
     List.foldl check_action_types [] actions
-  end*)
+  end
 
 (* Fonction de vérification sémantique principale complète *)
 fun semantic_check (absy_data : absy) (thy : theory) : theory =
@@ -863,12 +934,12 @@ fun semantic_check (absy_data : absy) (thy : theory) : theory =
         val _ = message false ("  ✓ CPS-style trace for " ^ thread_name ^ ":")
         val _ = List.app (fn ev => message false ("    " ^ @{make_string} ev)) cps_trace
         (* Vérification des types *)
-        (*val type_errors = type_check_thread thy thread
+        val type_errors = type_check_thread thy thread varstab
         val _ = if null type_errors then
                   message false ("  ✓ Type checking passed for " ^ thread_name)
                 else
                   (message false ("  ✗ Type errors in " ^ thread_name ^ ":");
-                   map (fn err => message false ("    " ^ err)) type_errors; ())*)
+                   map (fn err => message false ("    " ^ err)) type_errors; ())
         
         (* Simulation d'exécution pour détecter d'autres problèmes *)
         val initial_state = fn _ => 0
@@ -1052,38 +1123,7 @@ and action_list_to_csp [] state = ("SKIP", state)
       in
         (s1 ^ "→" ^ s2, state2)
       end
-    (*fun action_to_csp action =
-      case action of
-        | SendA (bdg, term) =>
-            let
-              val val_str = Int.toString (eval_term_to_int @{theory} term (fn _ => 0))
-            in
-              "update_" ^ Binding.name_of bdg ^ "!" ^ val_str
-            end
-        | ReceiveA (bdg, _) => "read_" ^ Binding.name_of bdg ^ "?x "
-        | IfelseA ((c, a1), a2) => let 
-              val val_str = ( Bool.toString (eval_term_to_bool @{theory} c (fn _ => 0)))
-               in
-                 "( (" ^val_str ^"→" ^ action_to_csp (sequence_actions a1) ^ ") [] (¬" ^val_str ^"→" ^ action_to_csp (sequence_actions a2) ^ ") )"
-               end       
-        | WhileA (_, body) => "µ X. " ^ action_to_csp (sequence_actions body) ^ " -> X"
-        | AssignA (bdg, term) =>
-            let
-              val typ = fastype_of term
-              val val_str =
-                if typ = @{typ int} orelse typ = @{typ nat} then
-                  Int.toString (eval_term_to_int @{theory} term (fn _ => 0))
-                else if typ = @{typ bool} then
-                  Bool.toString (eval_term_to_bool @{theory} term (fn _ => 0))
-                else
-                  error ("Unsupported type in assignment to " ^ Binding.name_of bdg ^
-                         ": only int, nat, and bool are supported")
-            in
-              "update_" ^ Binding.name_of bdg ^ "!" ^ val_str
-            end
-        |SeqA (A1,A2) => action_to_csp A1 ^ "→" ^ action_to_csp A2
-        | _ => raise Fail "Unhandled a_term in action_to_csp"
-*)
+
     (* Conversion d’un thread vers CSP *)
         fun thread_to_csp (thread : thread_absy) : string =
             let
@@ -1209,7 +1249,7 @@ SYSTEM WellTypedSys
          actions 
          SKIP;
          LOCK l;
-         v ->‹5›;
+         v ->‹False›;
          UNLOCK l;
          IF ‹x› THEN 
             WHILE x DO 
@@ -1250,7 +1290,6 @@ SYSTEM S
        any var_local :int = ‹4 :: int›  test : int = ‹-3 ::int›
        actions SKIP;
        var_local = ‹(4+5) :: int›;
-      x = True;
       test = ‹2* var_local›;
       test = ‹test+3›;
       IF ‹x› THEN 
