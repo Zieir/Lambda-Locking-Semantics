@@ -997,14 +997,27 @@ fun generate_csp_code (absy_data : absy) : string =
               "update_" ^ Binding.name_of bdg ^ "!" ^ val_str
             end
         | ReceiveA (bdg, _) => "read_" ^ Binding.name_of bdg ^ "?x "
-        | IfelseA ((c, a1), a2) => "( (c→" ^ action_to_csp (sequence_actions a1) ^ ") [] (¬c→" ^ action_to_csp (sequence_actions a2) ^ ") )"
+        | IfelseA ((c, a1), a2) => let 
+              val val_str = ( Bool.toString (eval_term_to_bool @{theory} c (fn _ => 0)))
+               in
+                 "( (" ^val_str ^"→" ^ action_to_csp (sequence_actions a1) ^ ") [] (¬" ^val_str ^"→" ^ action_to_csp (sequence_actions a2) ^ ") )"
+               end       
         | WhileA (_, body) => "µ X. " ^ action_to_csp (sequence_actions body) ^ " -> X"
         | AssignA (bdg, term) =>
             let
-              val val_str = Int.toString (eval_term_to_int @{theory} term (fn _ => 0))
+              val typ = fastype_of term
+              val val_str =
+                if typ = @{typ int} orelse typ = @{typ nat} then
+                  Int.toString (eval_term_to_int @{theory} term (fn _ => 0))
+                else if typ = @{typ bool} then
+                  Bool.toString (eval_term_to_bool @{theory} term (fn _ => 0))
+                else
+                  error ("Unsupported type in assignment to " ^ Binding.name_of bdg ^
+                         ": only int, nat, and bool are supported")
             in
               "update_" ^ Binding.name_of bdg ^ "!" ^ val_str
-            end        | SeqA (A1,A2)=> action_to_csp A1 ^" → "^ action_to_csp A2
+            end
+        |SeqA (A1,A2) => action_to_csp A1 ^ "→" ^ action_to_csp A2
         | _ => raise Fail "Unhandled a_term in action_to_csp"
 
     (* Conversion d’un thread vers CSP *)
@@ -1160,7 +1173,7 @@ thread t2 :
          DONE
   end;
 end;
-
+(*
 SYSTEM S
   globals v :nat= ‹4::nat› x :bool = True
   locks   l: nat
@@ -1182,6 +1195,6 @@ SKIP;
                DONE
 
   end;
-end;
+end;*)
 
 end
