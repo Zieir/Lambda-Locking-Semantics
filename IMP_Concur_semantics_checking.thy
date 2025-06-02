@@ -410,20 +410,17 @@ val context_check = fn (((system: binding ,
 
 section‹Semantic Check›
 ML‹
-(* 1. D'abord, définir les types de base de la sémantique *)
+(* Redéfinir les types de base de la sémantique *)
 type SV = string  (* Shared Variables *)
 type V = string   (* Thread-Local Variables *)  
 type MV = int     (* Mutex IDs *)
 type D = int      (* Data type - simplifié à int *)
 
-(* 2. Définir le type des états locaux *)
 type state = string -> int
 
-(* 3. Définir les types d'expressions *)
 type arith_expr = state -> int
 type bool_expr = state -> bool
 
-(* 4. Définir le datatype com correspondant à votre AST *)
 datatype com = 
     SKIP
   | Assign of string * arith_expr
@@ -435,7 +432,7 @@ datatype com =
   | Store of arith_expr * string
   | Load of string * string
 
-(* 5. Table de mapping pour les locks *)
+(* Table de mapping pour les locks *)
 val lock_table = Unsynchronized.ref (Symtab.empty : int Symtab.table)
 val lock_counter = Unsynchronized.ref 0
 
@@ -451,7 +448,7 @@ fun get_lock_id (lock_name : string) : int =
         new_id 
       end
 
-(* 6. Évaluation des termes Isabelle/HOL *)
+(* Évaluation des termes Isabelle/HOL *)
 fun eval_term_to_int (thy : theory) (term : term) (state : state) : int =
   let
     (* Fonction récursive pour évaluer les termes *)
@@ -489,18 +486,18 @@ fun eval_term_to_bool (thy : theory) (term : term) (state : state) : bool =
           (eval t1) orelse (eval t2)
       | Const (@{const_name "HOL.Not"}, _) $ t1 =>
           not (eval t1)
+      | Const (@{const_name "HOL.eq"}, _) $ t1 $ t2 =>
+          (eval_term_to_int thy t1 state) = (eval_term_to_int thy t2 state)
       | Const (@{const_name "Orderings.ord_class.less"}, _) $ t1 $ t2 =>
           (eval_term_to_int thy t1 state) < (eval_term_to_int thy t2 state)
       | Const (@{const_name "Orderings.ord_class.less_eq"}, _) $ t1 $ t2 =>
           (eval_term_to_int thy t1 state) <= (eval_term_to_int thy t2 state)
-      | Const (@{const_name "HOL.eq"}, _) $ t1 $ t2 =>
-          (eval_term_to_int thy t1 state) = (eval_term_to_int thy t2 state)
       | Free (name, _) => 
           (case try (fn () => state name) () of
             SOME 0 => false
           | SOME _ => true
           | NONE => false)
-      | _ => true (* Valeur par défaut *)
+      | _ => error ("Unsupported boolean expression: " ^ Syntax.string_of_term_global thy t)
   in
     eval term
   end
@@ -513,7 +510,7 @@ fun eval_term_to_bool (thy : theory) (term : term) (state : state) : bool =
     (system, globals_decls, locks_decls, threads_decls)
   end
 *)
-(* 7. Fonction de conversion de votre AST vers com *)
+(* Fonction de conversion de l'AST vers com *)
 fun convert_to_com (thy : theory) (actions : a_term list) 
                    (varstab : (term option) Symtab.table) 
                    (locstab : (term option) Symtab.table) : com =
@@ -552,7 +549,7 @@ fun convert_to_com (thy : theory) (actions : a_term list)
   in
     convert_actions_to_seq actions
   end
-(* 7b. Alternative CPS-style semantics *)
+(* Alternative CPS-style semantics *)
 datatype csp_event = 
     LockEvent of string * int
   | UnlockEvent of string * int  
@@ -610,7 +607,7 @@ fun sem_cps SKIP cont =
         end)
 type csp_trace = csp_event list
 
-(* 9. Fonction Sem₀ adaptée avec gestion des événements CSP *)
+(* Fonction Sem adaptée avec gestion des événements CSP *)
 fun sem_step (thy : theory) (cmd : com) (cont : state * csp_trace -> state * csp_trace) 
              (s : state, trace : csp_trace) : state * csp_trace =
   case cmd of
@@ -664,9 +661,9 @@ fun sem_step (thy : theory) (cmd : com) (cont : state * csp_trace -> state * csp
         cont (new_state, new_trace)
       end
 
-(* 10. Analyses sémantiques avancées *)
+(* Analyses sémantiques avancées *)
 
-(* Détection de deadlock simple *)
+(* Détection de deadlocks simples *)
 fun detect_potential_deadlock (threads : thread_absy list) : string list =
   let
     fun extract_locks_from_actions (actions : a_term list) : string list =
@@ -776,7 +773,7 @@ fun detect_race_conditions (threads : thread_absy list) : string list =
     find_races thread_accesses
   end
 
-(* 11. Vérification de cohérence des types *)
+(* Vérification de cohérence des types *)
 (*fun type_check_thread (thy : theory) (thread : thread_absy) : string list =
   let
     val {nom_thread, locals_decl, actions, locstab} = thread
@@ -819,7 +816,7 @@ fun detect_race_conditions (threads : thread_absy list) : string list =
     List.foldl check_action_types [] actions
   end*)
 
-(* 12. Fonction de vérification sémantique principale complète *)
+(* Fonction de vérification sémantique principale complète *)
 fun semantic_check (absy_data : absy) (thy : theory) : theory =
   let
     val {system, globals_decls, varstab, locks_decls, threads_decls} = absy_data
@@ -954,7 +951,6 @@ fun semantic_check (absy_data : absy) (thy : theory) : theory =
     thy
   end
 
-(* 13. Mise à jour de la fonction semantics existante *)
 fun semantics (absy_cl: theory -> absy) (thy : theory) = 
   let
     val absy_data = absy_cl thy
@@ -966,7 +962,7 @@ fun sequence_actions [] = SkipA
   | sequence_actions [a] = a
   | sequence_actions (a::rest) = SeqA (a, sequence_actions rest)
 
-(* 14. Fonction pour générer le code CSP complet *)
+(* Fonction pour générer le code CSP complet *)
 fun generate_csp_code (absy_data : absy) : string =
   let
     val {system, globals_decls, locks_decls, threads_decls, varstab} = absy_data
@@ -1046,7 +1042,6 @@ fun generate_csp_code (absy_data : absy) : string =
     ]
   end
 
-(* Mise à jour de la commande SYSTEM pour inclure la vérification sémantique *)
 val _ =
  Outer_Syntax.command
     \<^command_keyword>‹SYSTEM›
@@ -1166,8 +1161,8 @@ thread t2 :
   end;
 end;
 
-(*SYSTEM S
-  globals v :nat= ‹4::nat›
+SYSTEM S
+  globals v :nat= ‹4::nat› x :bool = True
   locks   l: nat
   (*thread t :
        any var_local:‹()›
@@ -1177,15 +1172,16 @@ end;
   thread m:
        any var_local :int = ‹4 :: int›
        actions SKIP;
-       LOCK 4;
        var_local = ‹(4+5) :: int›;
-      IF ‹4+5 == 4› THEN 
-              WHILE v DO 
-              LOCK 5; 
-              UNLOCK 4;DONE 
-           ELSE
-        SKIP;DONE
+      IF ‹x› THEN 
+                  WHILE x DO 
+SKIP;
+                  DONE 
+               ELSE
+                  SKIP;
+               DONE
+
   end;
 end;
-*)
+
 end
