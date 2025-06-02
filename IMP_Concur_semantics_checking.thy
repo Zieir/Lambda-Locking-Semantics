@@ -196,7 +196,8 @@ fun read_term_err_pos thy msg _ str pos =
 (* Utilitaire pour lire un terme à partir d’une string *)
 fun get_term_and_vars thy str =
   let
-    val term = Syntax.read_term_global thy str
+    val ctxt = Proof_Context.init_global thy
+    val term = Syntax.read_term ctxt str
     val vars = Term.add_free_names term []
   in
     (term, vars)
@@ -304,10 +305,11 @@ fun check_thread thy thy3 vars_tab (((SOME thread_name, locals_opt), actions_lis
       | action_conv varstab locstab (While (cond_str, body)) =
           let
             val (term, vars) = get_term_and_vars thy cond_str
-            val cond_term =
+           (* val cond_term =
               case vars of
                 [x] => resolve_var_strict false x locstab varstab
-              | _ => term
+              | _ => term*)
+            val cond_term =  term  
             val actions = map (action_conv varstab locstab) body
           in
             WhileA (cond_term, actions)
@@ -877,16 +879,33 @@ fun type_check_thread (thy : theory) (thread : thread_absy) (varstab) : string l
           cond_error @ then_errors @ else_errors @ errors
         end
 
-      | WhileA (cond, body) =>
-          let
-            val cond_type = fastype_of cond
-            val cond_error =
-              if cond_type = @{typ bool} then []
-              else ["While condition must be boolean, got: " ^ Syntax.string_of_typ_global thy cond_type]
-            val body_errors = List.foldl check_action_types [] body
-          in
-            cond_error @ body_errors @ errors
-          end
+     | WhileA (cond, body) =>
+            let
+              val cond_type =
+                let
+                  val t = cond
+                in
+                  case cond of
+                    Free (x, _) =>
+                      (case Symtab.lookup locstab x of
+                         SOME (SOME t') => fastype_of t'
+                       | SOME NONE => error ("Variable " ^ x ^ " declared but has no initial value")
+                       | NONE =>
+                           (case Symtab.lookup (!SPY |> Option.valOf |> #varstab) x of
+                              SOME (SOME t') => fastype_of t'
+                            | SOME NONE => error ("Global variable " ^ x ^ " declared but has no initial value")
+                            | NONE => fastype_of t))  (* fallback *)
+                  | _ => fastype_of t
+                end
+        
+              val cond_error =
+                if cond_type = @{typ bool} then []
+                else ["While condition must be boolean, got: " ^ Syntax.string_of_typ_global thy cond_type]
+        
+              val body_errors = List.foldl check_action_types [] body
+            in
+              cond_error @ body_errors @ errors
+            end
 
       | _ => errors
 
@@ -1070,6 +1089,33 @@ fun action_to_csp action state =
     | UnlockA bdg => ("unlock_" ^ Binding.name_of bdg ^ "!0", state)
     | SendA (bdg, term) =>
         let
+          val name = Binding.name_of bdg
+          val typ = fastype_of term
+          val v = if typ = @{typ bool}
+                  then if eval_term_to_bool @{theory} term state then 1 else 0
+                  else eval_term_to_int @{theory} term state
+          val new_state = update_state state name v
+        in
+          ("update_" ^ name ^ "!" ^ Int.toString v, new_state)
+        end
+    
+    | ReceiveA (bdg, _) =>
+        let
+          val name = Binding.name_of bdg
+          val typ =
+            case Symtab.lookup (!SPY |> Option.valOf |> #varstab) name of
+              SOME (SOME t) => fastype_of t
+            | _ =>
+              case Symtab.lookup (!SPY |> Option.valOf |> #threads_decls |> hd |> #locstab) name of
+                SOME (SOME t) => fastype_of t
+              | _ => @{typ int}  (* fallback *)
+          val default_val = if typ = @{typ bool} then 0 else 0  (* bool codé en int aussi ici *)
+          val new_state = update_state state name default_val
+        in
+          ("read_" ^ name ^ "?x", new_state)
+        end
+    (*| SendA (bdg, term) =>
+        let
           val v = eval_term_to_int @{theory} term state
           val new_state = update_state state (Binding.name_of bdg) v
         in
@@ -1080,7 +1126,7 @@ fun action_to_csp action state =
           val new_state = update_state state (Binding.name_of bdg) 0
         in
           ("read_" ^ Binding.name_of bdg ^ "?x", new_state)
-        end
+        end*)
     | AssignA (bdg, term) =>
         let
           val name = Binding.name_of bdg
@@ -1267,10 +1313,12 @@ thread t2 :
          actions 
          SKIP;
          LOCK l;
-         v ->‹5›;
+         v ->‹3=2›;
+         v ->‹True›;
+         v ->‹False›;
          UNLOCK l;
          IF ‹x› THEN 
-            WHILE x DO 
+            WHILE ‹x› DO 
               LOCK l; 
               UNLOCK l;
             DONE 
@@ -1284,19 +1332,19 @@ end;
 SYSTEM S
   globals v :nat= ‹4::nat› x :bool = False
   locks   l: nat
-  (*thread t :
-       any var_local:‹()›
+  thread t :
+       any var_local:‹string›
        actions SKIP; LOCK 4;
-        v->5;
-  end;*)
+        v->‹5 :: nat›;
+  end;
   thread m:
        any var_local :int = ‹4 :: int›  test : int = ‹-3 ::int›
        actions SKIP;
        var_local = ‹(4+5) :: int›;
-      test = ‹2* var_local›;
-      test = ‹test+3›;
+      test = ‹2* var_local :: int›;
+      test = ‹test+3 :: int›;
       IF ‹x› THEN 
-                  WHILE x DO 
+                  WHILE ‹x› DO 
                     SKIP;
                   DONE 
                ELSE
