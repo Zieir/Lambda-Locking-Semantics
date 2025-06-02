@@ -1103,9 +1103,11 @@ fun action_to_csp action state =
         end  
     | WhileA (cond, body) =>
         let
+          val b = eval_term_to_bool @{theory} cond state
+          val val_str = if b then "true" else "false"
           val (body_code, _) = action_list_to_csp body state
         in
-          ("µ X. " ^ body_code ^ " -> X", state)
+          ("(µ X. If " ^ val_str ^" Then(" ^ body_code ^ " -> X) Else (SKIP) )", state)
         end
     | SeqA (a1, a2) =>
         let
@@ -1261,7 +1263,7 @@ SYSTEM WellTypedSys
          DONE
 end;
 thread t2 :
-         any var1:‹nat› = ‹(4+6) :: nat›
+         any var2:‹nat› = ‹(4+6) :: nat›
          actions 
          SKIP;
          LOCK l;
@@ -1275,6 +1277,7 @@ thread t2 :
          ELSE
             SKIP;
          DONE
+        var2 = ‹5›; 
   end;
 end;
 
