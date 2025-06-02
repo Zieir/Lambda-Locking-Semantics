@@ -1147,6 +1147,22 @@ SYSTEM WellTypedSys
          ELSE
             SKIP;
          DONE
+end;
+thread t2 :
+         any var1:‹nat› = ‹(4+6) :: nat›
+         actions 
+         SKIP;
+         LOCK l;
+         v ->‹5›;
+         UNLOCK l;
+         IF ‹x› THEN 
+            WHILE x DO 
+              LOCK l; 
+              UNLOCK l;
+            DONE 
+         ELSE
+            SKIP;
+         DONE
   end;
 end;
 
