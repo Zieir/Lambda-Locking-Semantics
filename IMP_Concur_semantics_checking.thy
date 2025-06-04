@@ -688,8 +688,8 @@ fun sem_step (thy : theory) (cmd : com) (cont : state * csp_trace -> state * csp
     end
   | Load (local_var, global_var) =>
       let
-        (* Simulation : on lit la valeur 0 par défaut *)
-        val read_value = 0
+        (*TODO*)
+        val read_value = s global_var
         val new_state = fn v => if v = local_var then read_value else s v
         val new_trace = ReadEvent (global_var, read_value) :: trace
       in
@@ -857,7 +857,6 @@ fun type_check_thread (thy : theory) (thread : thread_absy) (varstab) : string l
             val local_type =
               case Symtab.lookup locstab local_var of
                 SOME (SOME t) => fastype_of t
-              | SOME NONE => error ("Variable " ^ local_var ^ " declared but has no initial value")
               | NONE => error ("Local variable " ^ local_var ^ " not declared")
 
             val shared_type =
@@ -941,13 +940,12 @@ fun type_check_thread (thy : theory) (thread : thread_absy) (varstab) : string l
 
 fun build_initial_state_for_thread 
       (globals : (binding * typ * Position.T * term option) list) 
-      (locals : ((binding * typ) * term option) list) : state =
+      (locals : ((binding * typ) * term option) list) (thy: theory) : state =
   let
-    fun term_to_int (SOME t) =
-        (case try (HOLogic.dest_number #> snd) t of
-            SOME n => n
-          | NONE => 0)
-      | term_to_int NONE = 0
+    fun term_to_int t_opt =
+        case t_opt of
+            NONE => 0
+          | SOME t => eval_term_to_int thy t (fn _ => 0)
 
     val global_vals = map (fn (bdg, _, _, t_opt) =>
                             (Binding.name_of bdg, term_to_int t_opt)) globals
@@ -956,7 +954,6 @@ fun build_initial_state_for_thread
                             (Binding.name_of bdg, term_to_int t_opt)) locals
 
     val all_vals = local_vals @ global_vals
-
   in
     fn var => case AList.lookup (op =) all_vals var of
                 SOME v => v
@@ -1015,7 +1012,7 @@ fun semantic_check (absy_data : absy) (thy : theory) : theory =
         | SOME msg => error msg
 
         (* Simulation d'exécution pour détecter d'autres problèmes *)
-        val initial_state = build_initial_state_for_thread globals_decls locals_decl
+        val initial_state = build_initial_state_for_thread globals_decls locals_decl thy
         val (final_state, execution_trace) = 
           sem_step thy com_program (fn (s, t) => (s, t)) (initial_state, [])
         
@@ -1114,8 +1111,8 @@ fun sequence_actions [] = SkipA
   | sequence_actions (a::rest) = SeqA (a, sequence_actions rest)
 
 (* Fonction pour générer le code CSP complet *)
-fun generate_csp_code (absy_data : absy) : string =
-  let
+fun generate_csp_code (absy_data : absy) (thy : theory) : string =
+let
     val {system, globals_decls, locks_decls, threads_decls, varstab} = absy_data
     val system_name = Binding.name_of system
 
@@ -1136,114 +1133,92 @@ fun generate_csp_code (absy_data : absy) : string =
       end
 
     (* Conversion d'une action en CSP *)
-fun action_to_csp action state =
-  case action of
-      SkipA => ("SKIP", state)
-    | LockA bdg => ("lock_" ^ Binding.name_of bdg ^ "!0", state)
-    | UnlockA bdg => ("unlock_" ^ Binding.name_of bdg ^ "!0", state)
-    | SendA (bdg, term) =>
-        let
-          val name = Binding.name_of bdg
-          val typ = fastype_of term
-          val v = if typ = @{typ bool}
-                  then if eval_term_to_bool @{theory} term state then 1 else 0
-                  else eval_term_to_int @{theory} term state
-          val new_state = update_state state name v
-        in
-          ("update_" ^ name ^ "!" ^ Int.toString v, new_state)
-        end
-    
-    | ReceiveA (local_bdg, global_bdg) =>
-        let
-          val typ =
-            case Symtab.lookup (!SPY |> Option.valOf |> #varstab) (Binding.name_of global_bdg) of
-              SOME (SOME t) => fastype_of t
-            | _ =>
-              case Symtab.lookup (!SPY |> Option.valOf |> #threads_decls |> hd |> #locstab) (Binding.name_of local_bdg) of
-                SOME (SOME t) => fastype_of t
-              | _ => @{typ int}  (* fallback *)
-          
-    
-          val global_var_name = Binding.name_of global_bdg
-          val v = state global_var_name
-          val local_var_name = Binding.name_of local_bdg
-          val new_state = update_state state local_var_name v
-        in
-          ("read_" ^ global_var_name ^ "!" ^ Int.toString v, new_state)
-        end
-    (*| SendA (bdg, term) =>
-        let
-          val v = eval_term_to_int @{theory} term state
-          val new_state = update_state state (Binding.name_of bdg) v
-        in
-          ("update_" ^ Binding.name_of bdg ^ "!" ^ Int.toString v, new_state)
-        end
-    | ReceiveA (bdg, _) =>
-        let
-          val new_state = update_state state (Binding.name_of bdg) 0
-        in
-          ("read_" ^ Binding.name_of bdg ^ "?x", new_state)
-        end*)
-    | AssignA (bdg, term) =>
-        let
-          val name = Binding.name_of bdg
-          val typ = fastype_of term
-          val v = if typ = @{typ bool}
-                  then if eval_term_to_bool @{theory} term state then 1 else 0
-                  else eval_term_to_int @{theory} term state
-          val new_state = update_state state name v
-        in
-          ("update_" ^ name ^ "!" ^ Int.toString v, new_state)
-        end
-    | IfelseA ((cond, a1), a2) =>
-        let
-          val b = eval_term_to_bool @{theory} cond state
-          val val_str = if b then "true" else "false"
-          val (then_code, _) = action_list_to_csp a1 state
-          val (else_code, _) = action_list_to_csp a2 state
-        in
-          ("( (" ^ val_str ^ "→" ^ then_code ^ ") [] (¬" ^ val_str ^ "→" ^ else_code ^ ") )", state)
-        end  
-    | WhileA (cond, body) =>
-        let
-          val b = eval_term_to_bool @{theory} cond state
-          val val_str = if b then "true" else "false"
-          val (body_code, _) = action_list_to_csp body state
-        in
-          ("(µ X. If " ^ val_str ^" Then(" ^ body_code ^ " -> X) Else (SKIP) )", state)
-        end
-    | SeqA (a1, a2) =>
-        let
-          val (s1, state1) = action_to_csp a1 state
-          val (s2, state2) = action_to_csp a2 state1
-        in
-          (s1 ^ "→" ^ s2, state2)
-        end
-and action_list_to_csp [] state = ("SKIP", state)
-  | action_list_to_csp [a] state = action_to_csp a state
-  | action_list_to_csp (a::rest) state =
+fun action_list_to_csp [] state thy = ("SKIP", state)
+  | action_list_to_csp [a] state thy = action_to_csp a state thy
+  | action_list_to_csp (a::rest) state thy =
       let
-        val (s1, state1) = action_to_csp a state
-        val (s2, state2) = action_list_to_csp rest state1
+        val (s1, state1) = action_to_csp a state thy
+        val (s2, state2) = action_list_to_csp rest state1 thy
+      in
+        (s1 ^ "→" ^ s2, state2)
+      end
+
+and action_to_csp action state thy =
+  case action of
+    SkipA => ("SKIP", state)
+  | LockA bdg => ("lock_" ^ Binding.name_of bdg ^ "!0", state)
+  | UnlockA bdg => ("unlock_" ^ Binding.name_of bdg ^ "!0", state)
+  | AssignA (bdg, term) =>
+      let
+        val name = Binding.name_of bdg
+        val typ = fastype_of term
+        val v = if typ = @{typ bool}
+                then if eval_term_to_bool thy term state then 1 else 0
+                else eval_term_to_int thy term state
+        val new_state = update_state state name v
+      in
+        ("update_" ^ name ^ "!" ^ Int.toString v, new_state)
+      end
+  | SendA (bdg, term) =>
+      let
+        val name = Binding.name_of bdg
+        val typ = fastype_of term
+        val v = if typ = @{typ bool}
+                then if eval_term_to_bool thy term state then 1 else 0
+                else eval_term_to_int thy term state
+        val new_state = update_state state name v
+      in
+        ("update_" ^ name ^ "!" ^ Int.toString v, new_state)
+      end
+  | ReceiveA (local_bdg, global_bdg) =>
+      let
+        val global_var_name = Binding.name_of global_bdg
+        val v = state global_var_name
+        val local_var_name = Binding.name_of local_bdg
+        val new_state = update_state state local_var_name v
+      in
+        ("read_" ^ global_var_name ^ "!" ^ Int.toString v, new_state)
+      end
+  | IfelseA ((cond, a1), a2) =>
+      let
+        val b = eval_term_to_bool thy cond state
+        val val_str = if b then "true" else "false"
+        val (then_code, _) = action_list_to_csp a1 state thy
+        val (else_code, _) = action_list_to_csp a2 state thy
+      in
+        ("( (" ^ val_str ^ "→" ^ then_code ^ ") [] (¬" ^ val_str ^ "→" ^ else_code ^ ") )", state)
+      end
+  | WhileA (cond, body) =>
+      let
+        val val_str = if eval_term_to_bool thy cond state then "true" else "false"
+        val (body_code, _) = action_list_to_csp body state thy
+      in
+        ("(µ X. If " ^ val_str ^ " Then(" ^ body_code ^ " -> X) Else (SKIP) )", state)
+      end
+  | SeqA (a1, a2) =>
+      let
+        val (s1, state1) = action_to_csp a1 state thy
+        val (s2, state2) = action_to_csp a2 state1 thy
       in
         (s1 ^ "→" ^ s2, state2)
       end
 
     (* Conversion d’un thread vers CSP *)
-        fun thread_to_csp (thread : thread_absy) : string =
-            let
-              val {nom_thread, actions, ...} = thread
-              val thread_name = Binding.name_of nom_thread
-              val (code, _) = action_list_to_csp actions (fn _ => 0)
-           in
-              thread_name ^ " = " ^ code 
-            end
+        fun thread_to_csp globals_decls (thread : thread_absy) thy : string =
+          let
+            val {nom_thread, actions, locals_decl, ...} = thread
+            val thread_name = Binding.name_of nom_thread
+        
+            val initial_state = build_initial_state_for_thread globals_decls locals_decl thy
+            val (code, _) = action_list_to_csp actions initial_state thy
+          in
+            thread_name ^ " = " ^ code 
+          end
+          
+    fun generate_threads globals_decls threads_decls thy =
+        String.concatWith "\n" (map (fn t => thread_to_csp globals_decls t thy) threads_decls)
 
-    (* Combiner tous les threads *)
-    fun generate_threads () =
-      String.concatWith "\n" (map thread_to_csp threads_decls)
-
-    (* Génération du système global *)
+    (*Génération du système global *)
     fun generate_system () =
       let
         val thread_names = map (fn t => Binding.name_of (#nom_thread t)) threads_decls
@@ -1257,7 +1232,7 @@ and action_list_to_csp [] state = ("SKIP", state)
       generate_events (),
       "",
       "-- Threads",
-      generate_threads (),
+      generate_threads globals_decls threads_decls thy,
       "",
       "-- System",
       generate_system ()
@@ -1279,7 +1254,7 @@ val _ =
           val _ = Output.writeln "=== SEMANTIC CHECKING ==="
           val thy' = semantic_check checked thy
           val _ = Output.writeln "=== CSP CODE GENERATION ==="
-          val csp_code = generate_csp_code checked
+          val csp_code = generate_csp_code checked thy
           val _ = Output.writeln ("Generated CSP: " ^ csp_code)
         in
           thy'
@@ -1347,10 +1322,10 @@ ML‹
 ›
 
 SYSTEM WellTypedSys
-  globals v:‹bool› = ‹True› x:‹bool› = False var1:‹nat› = ‹(4+6) :: nat›
+  globals v:‹bool› = ‹True› x:‹bool› = False var1:‹int› = ‹(4+6) :: int›
   locks   l:‹()›                                       
   thread t1 : 
-         any y : ‹nat› = ‹5 :: nat›
+         any y : ‹int› = ‹5 :: int›
          actions 
          SKIP;
          LOCK l;
@@ -1364,15 +1339,15 @@ SYSTEM WellTypedSys
          ELSE
             SKIP;
          DONE
-
-        y  = ‹y+2 :: nat›;
+        y<- var1;
+        y  = ‹y+2 :: int›;
         var1 -> ‹var1 +1 ›;
         var1 -> ‹var1 +1 ›;
         var1 -> ‹var1 +1 ›;
 
 end;
 thread t2 :
-         any var2:‹nat› = ‹(4+6) :: nat›
+         any var2:‹nat› = ‹(4+6) :: nat› y : ‹nat› = ‹5 :: nat›
          actions 
          SKIP;
          LOCK l;
@@ -1388,8 +1363,7 @@ thread t2 :
          ELSE
             SKIP;
          DONE
-        var2 = ‹5 :: nat›; 
-        var2 = ‹var2 + 3 :: nat›; 
+        y = ‹var2 + 3 :: nat›; 
 
   end;
 end;
