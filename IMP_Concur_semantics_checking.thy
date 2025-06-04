@@ -193,7 +193,7 @@ fun read_term_err_pos thy msg _ str pos =
         (Syntax.read_term_global thy str
              handle ERROR s => error("error in "^msg^" :"^ (Position.here pos) ^"\n"^ s ) ) 
 
-(* Utilitaire pour lire un terme à partir d’une string *)
+(* Utilitaire pour lire un terme à partir d’un string *)
 fun get_term_and_vars thy str =
   let
     val ctxt = Proof_Context.init_global thy
@@ -460,7 +460,7 @@ fun eval_term_to_int (thy : theory) (term : term) (state : state) : int =
       | @{term "0::nat"} => 0
       | @{term "1::nat"} => 1
       | Free (name, _) => state name
-      | Bound i => 0 (* Placeholder pour les variables liées *)
+      | Bound i =>  i (* Placeholder pour les variables liées *)
       | _ => 
           (* Essayer d'extraire les constantes numériques *)
           (case try (HOLogic.dest_number #> snd) t of
@@ -528,7 +528,7 @@ fun convert_to_com (thy : theory) (actions : a_term list)
           if is_local
           then Assign (name, term_to_arith_expr term)  (* local *)
           else Store (term_to_arith_expr term, name)   (* global *)
-    end
+        end
       | LockA bdg => 
           Lock (Binding.name_of bdg)
       | UnlockA bdg => 
@@ -552,6 +552,32 @@ fun convert_to_com (thy : theory) (actions : a_term list)
   in
     convert_actions_to_seq actions
   end
+
+fun check_lock_ownership (thread_name : string) (actions : a_term list) =
+  let
+    fun check [] _ = NONE
+      | check (LockA b :: rest) held =
+          let val l = Binding.name_of b
+          in
+            if List.exists (fn x => x = l) held then 
+              SOME ("Thread " ^ thread_name ^ ": LOCK " ^ l ^ " already held")
+            else
+              check rest (l :: held)
+          end
+      | check (UnlockA b :: rest) held =
+          let val l = Binding.name_of b
+          in
+            if List.exists (fn x => x = l) held then
+              check rest (remove (op =) l held)
+            else
+              SOME ("Thread " ^ thread_name ^ ": tries to UNLOCK " ^ l ^ " without holding it")
+          end
+      | check (_ :: rest) held = check rest held
+  in
+    check actions []
+  end
+
+
 (* Alternative CPS-style semantics *)
 datatype csp_event = 
     LockEvent of string * int
@@ -913,6 +939,30 @@ fun type_check_thread (thy : theory) (thread : thread_absy) (varstab) : string l
     List.foldl check_action_types [] actions
   end
 
+fun build_initial_state_for_thread 
+      (globals : (binding * typ * Position.T * term option) list) 
+      (locals : ((binding * typ) * term option) list) : state =
+  let
+    fun term_to_int (SOME t) =
+        (case try (HOLogic.dest_number #> snd) t of
+            SOME n => n
+          | NONE => 0)
+      | term_to_int NONE = 0
+
+    val global_vals = map (fn (bdg, _, _, t_opt) =>
+                            (Binding.name_of bdg, term_to_int t_opt)) globals
+
+    val local_vals  = map (fn ((bdg, _), t_opt) =>
+                            (Binding.name_of bdg, term_to_int t_opt)) locals
+
+    val all_vals = local_vals @ global_vals
+
+  in
+    fn var => case AList.lookup (op =) all_vals var of
+                SOME v => v
+              | NONE => 0
+  end
+
 (* Fonction de vérification sémantique principale complète *)
 fun semantic_check (absy_data : absy) (thy : theory) : theory =
   let
@@ -959,9 +1009,13 @@ fun semantic_check (absy_data : absy) (thy : theory) : theory =
                 else
                   (message false ("  ✗ Type errors in " ^ thread_name ^ ":");
                    map (fn err => message false ("    " ^ err)) type_errors; ())
-        
+        (* Vérification que lock et unlock respectent des regles d'appartenance *)
+        val _ = case check_lock_ownership thread_name actions of
+          NONE => ()
+        | SOME msg => error msg
+
         (* Simulation d'exécution pour détecter d'autres problèmes *)
-        val initial_state = fn _ => 0
+        val initial_state = build_initial_state_for_thread globals_decls locals_decl
         val (final_state, execution_trace) = 
           sem_step thy com_program (fn (s, t) => (s, t)) (initial_state, [])
         
@@ -1099,20 +1153,23 @@ fun action_to_csp action state =
           ("update_" ^ name ^ "!" ^ Int.toString v, new_state)
         end
     
-    | ReceiveA (bdg, _) =>
+    | ReceiveA (local_bdg, global_bdg) =>
         let
-          val name = Binding.name_of bdg
           val typ =
-            case Symtab.lookup (!SPY |> Option.valOf |> #varstab) name of
+            case Symtab.lookup (!SPY |> Option.valOf |> #varstab) (Binding.name_of global_bdg) of
               SOME (SOME t) => fastype_of t
             | _ =>
-              case Symtab.lookup (!SPY |> Option.valOf |> #threads_decls |> hd |> #locstab) name of
+              case Symtab.lookup (!SPY |> Option.valOf |> #threads_decls |> hd |> #locstab) (Binding.name_of local_bdg) of
                 SOME (SOME t) => fastype_of t
               | _ => @{typ int}  (* fallback *)
-          val default_val = if typ = @{typ bool} then 0 else 0  (* bool codé en int aussi ici *)
-          val new_state = update_state state name default_val
+          
+    
+          val global_var_name = Binding.name_of global_bdg
+          val v = state global_var_name
+          val local_var_name = Binding.name_of local_bdg
+          val new_state = update_state state local_var_name v
         in
-          ("read_" ^ name ^ "?x", new_state)
+          ("read_" ^ global_var_name ^ "!" ^ Int.toString v, new_state)
         end
     (*| SendA (bdg, term) =>
         let
@@ -1290,10 +1347,10 @@ ML‹
 ›
 
 SYSTEM WellTypedSys
-  globals v:‹bool› = ‹True› x:‹bool› = False
+  globals v:‹bool› = ‹True› x:‹bool› = False var1:‹nat› = ‹(4+6) :: nat›
   locks   l:‹()›                                       
-  thread t1 :
-         any var1:‹nat› = ‹(4+6) :: nat›
+  thread t1 : 
+         any y : ‹nat› = ‹5 :: nat›
          actions 
          SKIP;
          LOCK l;
@@ -1307,6 +1364,12 @@ SYSTEM WellTypedSys
          ELSE
             SKIP;
          DONE
+
+        y  = ‹y+2 :: nat›;
+        var1 -> ‹var1 +1 ›;
+        var1 -> ‹var1 +1 ›;
+        var1 -> ‹var1 +1 ›;
+
 end;
 thread t2 :
          any var2:‹nat› = ‹(4+6) :: nat›
@@ -1325,7 +1388,9 @@ thread t2 :
          ELSE
             SKIP;
          DONE
-        var2 = ‹5›; 
+        var2 = ‹5 :: nat›; 
+        var2 = ‹var2 + 3 :: nat›; 
+
   end;
 end;
 
@@ -1333,8 +1398,10 @@ SYSTEM S
   globals v :nat= ‹4::nat› x :bool = False
   locks   l: nat
   thread t :
-       any var_local:‹string›
-       actions SKIP; LOCK 4;
+       any var_local:‹nat›
+       actions 
+        SKIP; 
+        LOCK 4;
         v->‹5 :: nat›;
   end;
   thread m:
