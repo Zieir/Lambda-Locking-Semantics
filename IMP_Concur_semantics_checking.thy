@@ -266,20 +266,16 @@ fun check_thread thy thy3 vars_tab (((SOME thread_name, locals_opt), actions_lis
 
 
       | action_conv varstab locstab (Send (b, str)) =
-        let
-          val (term, vars) = get_term_and_vars thy str
-          val send_term =
-            case vars of
-              [x] => resolve_var_strict true x locstab varstab
-            | _ => term
-           val _ =
+          let
+            val (term, _) = get_term_and_vars thy str
+            val _ =
               if Symtab.defined locstab (Binding.name_of b) 
                  orelse Symtab.defined varstab (Binding.name_of b)
               then ()
-              else error ("Variable " ^ (Binding.name_of b) ^ " is not declared (in assign binding)")
-        in
-          SendA (b, send_term)
-        end
+              else error ("Variable " ^ (Binding.name_of b) ^ " is not declared (in send)")
+          in
+            SendA (b, term)
+          end
 
       | action_conv varstab locstab (Receive (blv, bsv)) =
         let
@@ -994,8 +990,9 @@ fun semantic_check (absy_data : absy) (thy : theory) : theory =
         
         (* Conversion vers com pour analyse sémantique *)
         val com_program = convert_to_com thy actions varstab locstab
-        
-        val cps_trace = sem_cps com_program (fn _ => []) (fn _ => 0)
+
+        val initial_state = build_initial_state_for_thread globals_decls locals_decl thy
+        val cps_trace = sem_cps com_program (fn _ => []) initial_state
 
         val _ = message false ("  ✓ CPS-style trace for " ^ thread_name ^ ":")
         val _ = List.app (fn ev => message false ("    " ^ @{make_string} ev)) cps_trace
@@ -1329,7 +1326,7 @@ SYSTEM WellTypedSys
          actions 
          SKIP;
          LOCK l;
-         v ->‹False›;
+         v ->‹False›;                                             
          UNLOCK l;
          IF ‹x› THEN 
             WHILE x DO 
@@ -1339,11 +1336,11 @@ SYSTEM WellTypedSys
          ELSE
             SKIP;
          DONE
-        y<- var1;
+        y <- var1;
         y  = ‹y+2 :: int›;
-        var1 -> ‹var1 +1 ›;
-        var1 -> ‹var1 +1 ›;
-        var1 -> ‹var1 +1 ›;
+        y  = ‹y+2 :: int›;
+        var1 -> ‹y›;
+
 
 end;
 thread t2 :
