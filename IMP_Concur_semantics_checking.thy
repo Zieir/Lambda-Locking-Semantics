@@ -1236,6 +1236,11 @@ and action_to_csp action state thy =
     ]
   end
 
+
+›
+
+section‹Impression›
+ML‹
 val _ =
  Outer_Syntax.command
     \<^command_keyword>‹SYSTEM›
@@ -1257,61 +1262,6 @@ val _ =
           thy'
         end)))
 
-(*
-val _ =
-  Outer_Syntax.command
-    \<^command_keyword>‹SYSTEM›
-    "defines System Specification"
-    (parse_system_spec >> (fn x =>
-      Toplevel.theory (fn thy =>
-        let
-          val _ = Output.writeln "=== PARSED SYSTEM ==="
-          val _ = Output.writeln (@{make_string} x)
-          val _ = Output.writeln "=== CONTEXT CHECKING ==="
-          val checked = context_check x thy
-          val _ = Output.writeln (@{make_string} checked)
-        in
-          thy
-        end)))*)
-›
-
-section‹Impression›
-ML‹
-(*
-val _ =
-  Outer_Syntax.command 
-      \<^command_keyword>‹SYSTEM›   
-      "defines System Specification"
-      (parse_system_spec >> context_check >> (Toplevel.theory o (K I)));
-a -> 'b * 'c) * ('b -> 'd) -> 'a -> 'd * 'c*)
-
-(* (Tokenlist → raw_absy* tokenlist)*(raw-absy→(theory→absy))→ Tokenlist→(theory→absy)*Tokenlist*)
-(* ( Tokenlist→(theory→absy)*Tokenlist)**)
-
-(*                                                    
-val _ =
-  Outer_Syntax.command
-    \<^command_keyword>‹SYSTEM›           
-    "defines System Specification"
-    (parse_system_spec >> (fn x =>
-      (Output.writeln (@{make_string} x); Toplevel.theory I)));
-*)
-(*
-val _ =
-  Outer_Syntax.command
-    \<^command_keyword>‹SYSTEM›
-    "defines System Specification"
-    (parse_system_spec >> (fn x =>
-      Toplevel.theory (fn thy =>
-        let
-          val _ = Output.writeln "=== PARSED SYSTEM ==="
-          val _ = Output.writeln (@{make_string} x)
-          val _ = Output.writeln "=== CONTEXT CHECKING ==="
-          val checked = context_check x thy
-          val _ = Output.writeln (@{make_string} checked)
-        in
-          thy
-        end)))*)
 ›
 
 ML‹
@@ -1319,7 +1269,7 @@ ML‹
 ›
 
 SYSTEM WellTypedSys
-  globals v:‹bool› = ‹True› x:‹bool› = False var1:‹int› = ‹(4+6) :: int›
+  globals v:‹bool› = ‹True› x:‹bool› = False var1:‹int› = ‹(4+6) :: int› 
   locks   l:‹()›                                       
   thread t1 : 
          any y : ‹int› = ‹5 :: int›
@@ -1336,10 +1286,9 @@ SYSTEM WellTypedSys
          ELSE
             SKIP;
          DONE
-        y <- var1;
         y  = ‹y+2 :: int›;
         y  = ‹y+2 :: int›;
-        var1 -> ‹y›;
+        var1 -> ‹y :: int›;
 
 
 end;
