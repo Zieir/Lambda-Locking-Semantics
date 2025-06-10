@@ -1,5 +1,5 @@
 theory IMP_CONCUR_parse
-  imports Main (*IMP_CONCUR_MULTI_CSPM*)
+  imports Main(*IMP_CONCUR_MULTI_CSPM*)
   keywords  "SYSTEM" :: thy_decl
       and   "globals" "locks" "LOCK" "UNLOCK" "thread" "WHILE" "IF" "ELSE" "THEN"
            "end;" "any" "actions" "DO" "<-" "->" "SKIP" "DONE"
@@ -95,8 +95,7 @@ and parse_while TL =(( \<^keyword>‹WHILE› |-- Parse.term --| \<^keyword>‹D
   end; *)
 val parse_threads =( \<^keyword>‹thread› |-- (Scan.option (Parse.binding)) --| Parse.$$$ ":"
                                       -- (Scan.option (\<^keyword>‹any› |--  Scan.repeat1 (parse_var_decl) ))
-                                     -- (\<^keyword>‹actions› |-- parse_actions)
-                                     --| \<^keyword>‹end;›)
+                                     -- (\<^keyword>‹actions› |-- parse_actions))
 
 type raw_absy =  (((binding (*system name*)
             *
@@ -539,6 +538,7 @@ fun convert_to_com (thy : theory) (actions : a_term list)
                 convert_actions_to_seq else_actions)
       | WhileA (cond_term, body_actions) =>
           While (term_to_bool_expr cond_term, convert_actions_to_seq body_actions)
+        
     
     and convert_actions_to_seq (actions : a_term list) : com =
       case actions of
@@ -803,12 +803,11 @@ fun detect_race_conditions (threads : thread_absy list) : string list =
   in
     find_races thread_accesses
   end
-
 (* Vérification de cohérence des types *)
 fun type_check_thread (thy : theory) (thread : thread_absy) (varstab) : string list =
   let
     val {nom_thread, locals_decl, actions, locstab} = thread
-
+    (*TODO : Checker le type depuis la declaration et non depuis varstab ou locstab ou bien donner une  valeur par défaut ???*)
     fun check_action_types (action, errors) =      case action of
         AssignA (bdg, term) =>
           let
@@ -1258,13 +1257,12 @@ val _ =
           val _ = Output.writeln "=== CSP CODE GENERATION ==="
           val csp_code = generate_csp_code checked thy
           val _ = Output.writeln ("Generated CSP: " ^ csp_code)
+          (*val absy_data = checked
+          val thy'      = semantic_check checked thy
+          val _         = CodeGen.compile_to_c absy_data thy'*)
         in
           thy'
         end)))
-
-›
-
-ML‹
 
 ›
 
@@ -1290,8 +1288,6 @@ SYSTEM WellTypedSys
         y  = ‹y+2 :: int›;
         var1 -> ‹y :: int›;
 
-
-end;
 thread t2 :
          any var2:‹nat› = ‹(4+6) :: nat› y : ‹nat› = ‹5 :: nat›
          actions 
@@ -1311,7 +1307,6 @@ thread t2 :
          DONE
         y = ‹var2 + 3 :: nat›; 
 
-  end;
 end;
 
 SYSTEM S
@@ -1323,7 +1318,6 @@ SYSTEM S
         SKIP; 
         LOCK 4;
         v->‹5 :: nat›;
-  end;
   thread m:
        any var_local :int = ‹4 :: int›  test : int = ‹-3 ::int›
        actions SKIP;
@@ -1337,8 +1331,6 @@ SYSTEM S
                ELSE
                   SKIP;
                DONE
-
-  end;
 end;
 
 end
