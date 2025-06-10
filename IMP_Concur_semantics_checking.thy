@@ -804,7 +804,7 @@ fun detect_race_conditions (threads : thread_absy list) : string list =
     find_races thread_accesses
   end
 (* Vérification de cohérence des types *)
-fun type_check_thread (thy : theory) (thread : thread_absy) (varstab) : string list =
+fun type_check_thread (thy : theory) (thread : thread_absy) (vars_decl) : string list =
   let
     val {nom_thread, locals_decl, actions, locstab} = thread
     (*TODO : Checker le type depuis la declaration et non depuis varstab ou locstab ou bien donner une  valeur par défaut ???*)
@@ -813,63 +813,81 @@ fun type_check_thread (thy : theory) (thread : thread_absy) (varstab) : string l
           let
             val var_name = Binding.name_of bdg
             val term_type = fastype_of term
-            val expected_type =
-              case Symtab.lookup locstab var_name of
-                SOME (SOME t) => fastype_of t
-              | SOME NONE => error ("Variable " ^ var_name ^ " declared but has no initial value")
-              | NONE =>  error ("Variable " ^ var_name ^ " is not localy declared")
+            val expected_type_opt = 
+                          case find_first (fn ((bdg', _), _) => Binding.name_of bdg' = var_name) locals_decl of
+                            SOME ((_, typ), _) => SOME typ
+                          | NONE => NONE
           in
-            if term_type = expected_type then
-              errors
-            else
-              ("Type mismatch in assignment to " ^ var_name ^
-               ": expected " ^ Syntax.string_of_typ_global thy expected_type ^
-               ", got " ^ Syntax.string_of_typ_global thy term_type) :: errors
+            case expected_type_opt of
+              SOME expected_type =>
+                if term_type = expected_type then
+                  errors
+                else
+                  ("Type mismatch in assignment to " ^ var_name ^
+                   ": expected " ^ Syntax.string_of_typ_global thy expected_type ^
+                   ", got " ^ Syntax.string_of_typ_global thy term_type) :: errors
+            | NONE =>
+                ("Variable " ^ var_name ^ " is not locally declared") :: errors
           end
 
       | SendA (bdg, term) =>
           let
             val var_name = Binding.name_of bdg
             val term_type = fastype_of term
-            val expected_type =
-              case Symtab.lookup varstab var_name of
-                SOME (SOME t) => fastype_of t
-              | SOME NONE => error ("Variable " ^ var_name ^ " declared but has no initial value")
-              | NONE => error ("Variable " ^ var_name ^ " is not declared")
+            val expected_type_opt = 
+                          case find_first (fn ( bdg', _, _, _) => Binding.name_of bdg' = var_name) vars_decl of
+                            SOME ( _, typ, _, _) => SOME typ
+                          | NONE => NONE
           in
-            if term_type = expected_type then
-              errors
-            else
-              ("Type mismatch in send to " ^ var_name ^
-               ": expected " ^ Syntax.string_of_typ_global thy expected_type ^
-               ", got " ^ Syntax.string_of_typ_global thy term_type) :: errors
+            case expected_type_opt of
+              SOME expected_type =>
+                if term_type = expected_type then
+                  errors
+                else
+                  ("Type mismatch in assignment to " ^ var_name ^
+                   ": expected " ^ Syntax.string_of_typ_global thy expected_type ^
+                   ", got " ^ Syntax.string_of_typ_global thy term_type) :: errors
+            | NONE =>
+                ("Variable " ^ var_name ^ " is not globally declared") :: errors
           end
 
       | ReceiveA (local_bdg, shared_bdg) =>
           let
             val local_var = Binding.name_of local_bdg
             val shared_var = Binding.name_of shared_bdg
-            val local_type =
-              case Symtab.lookup locstab local_var of
-                SOME (SOME t) => fastype_of t
-              | NONE => error ("Local variable " ^ local_var ^ " not declared")
+            val local_type_opt =
+                          case find_first (fn ((bdg', _), _) => Binding.name_of bdg' = local_var) locals_decl of
+                            SOME ((_, typ), _) => SOME typ
+                          | NONE => NONE
 
-            val shared_type =
+            val shared_type_opt =
+              (* DOUBLE CHECK IF THIS CAN SAFELY BE REMOVED
+
               case Symtab.lookup varstab shared_var of
                 SOME (SOME t) => fastype_of t
               | NONE =>
                 case Symtab.lookup (!SPY |> Option.valOf |> #varstab) shared_var of
                   SOME (SOME t) => fastype_of t
                 | _ => error ("Shared variable " ^ shared_var ^ " not declared")
-              | SOME NONE => error ("Variable " ^ shared_var ^ " declared but has no initial value")
-          in
-            if local_type = shared_type then errors
-            else
-              ("Type mismatch in receive: cannot assign " ^ shared_var ^ " to " ^ local_var ^
-               " (expected " ^ Syntax.string_of_typ_global thy local_type ^
-               ", got " ^ Syntax.string_of_typ_global thy shared_type ^ ")") :: errors
-          end
+              | SOME NONE => error ("Variable " ^ shared_var ^ " declared but has no initial value")*)
+                case find_first (fn ( bdg', _, _, _) => Binding.name_of bdg' = shared_var) vars_decl of
+                                            SOME ( _, typ, _, _) => SOME typ
+                                          | NONE => NONE
 
+           in
+            case (local_type_opt, shared_type_opt) of
+              (SOME local_type, SOME shared_type) =>
+                if local_type = shared_type then 
+                  errors
+                else
+                  ("Type mismatch in receive: cannot assign " ^ shared_var ^ " to " ^ local_var ^
+                   " (expected " ^ Syntax.string_of_typ_global thy local_type ^
+                   ", got " ^ Syntax.string_of_typ_global thy shared_type ^ ")") :: errors
+            | (NONE, _) =>
+                ("Local variable " ^ local_var ^ " not declared") :: errors
+            | (_, NONE) =>
+                ("Shared variable " ^ shared_var ^ " not declared") :: errors
+          end
       | IfelseA ((cond, then_branch), else_branch) =>
         let
           val cond_type =
@@ -980,7 +998,7 @@ fun semantic_check (absy_data : absy) (thy : theory) : theory =
                map (message false) race_warnings; ())
     
     (* Vérification 3: Vérification des types pour chaque thread *)
-    fun check_thread (thread : thread_absy) : unit =
+    fun check_thread globals_decls (thread : thread_absy) : unit =
       let
         val {nom_thread, locals_decl, actions, locstab} = thread
         val thread_name = Binding.name_of nom_thread
@@ -996,7 +1014,7 @@ fun semantic_check (absy_data : absy) (thy : theory) : theory =
         val _ = message false ("  ✓ CPS-style trace for " ^ thread_name ^ ":")
         val _ = List.app (fn ev => message false ("    " ^ @{make_string} ev)) cps_trace
         (* Vérification des types *)
-        val type_errors = type_check_thread thy thread varstab
+        val type_errors = type_check_thread thy thread globals_decls
         val _ = if null type_errors then
                   message false ("  ✓ Type checking passed for " ^ thread_name)
                 else
@@ -1019,7 +1037,7 @@ fun semantic_check (absy_data : absy) (thy : theory) : theory =
         ()
       end
     
-    val _ = map check_thread threads_decls
+    val _ = map (check_thread globals_decls) (threads_decls)
     
     (* Vérification 4: Cohérence globale du système *)
     val _ = message false "=== GLOBAL SYSTEM CONSISTENCY ==="
@@ -1267,7 +1285,7 @@ val _ =
 ›
 
 SYSTEM WellTypedSys
-  globals v:‹bool› = ‹True› x:‹bool› = False var1:‹int› = ‹(4+6) :: int› 
+  globals v:‹bool› = ‹True› x:‹bool› = False var1:‹int› 
   locks   l:‹()›                                       
   thread t1 : 
          any y : ‹int› = ‹5 :: int›
