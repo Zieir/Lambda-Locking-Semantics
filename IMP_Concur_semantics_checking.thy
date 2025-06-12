@@ -1,5 +1,5 @@
 theory IMP_CONCUR_parse
-  imports Main(*IMP_CONCUR_MULTI_CSPM*)
+  imports Main Isabelle_DOF.technical_report(*IMP_CONCUR_MULTI_CSPM*)
   keywords  "SYSTEM" :: thy_decl
       and   "globals" "locks" "LOCK" "UNLOCK" "thread" "WHILE" "IF" "ELSE" "THEN"
            "end;" "any" "actions" "DO" "<-" "->" "SKIP" "DONE"
@@ -88,11 +88,10 @@ and parse_while TL =(( \<^keyword>‹WHILE› |-- Parse.term --| \<^keyword>‹D
              actions  action1;
                        ... ;
                       actionN;
-  end;
-  thread T2: actions  action1;
+   thread T2: actions  action1;
                        ... ;
                       actionN;
-  end; *)
+ *)
 val parse_threads =( \<^keyword>‹thread› |-- (Scan.option (Parse.binding)) --| Parse.$$$ ":"
                                       -- (Scan.option (\<^keyword>‹any› |--  Scan.repeat1 (parse_var_decl) ))
                                      -- (\<^keyword>‹actions› |-- parse_actions))
@@ -1154,12 +1153,15 @@ fun action_list_to_csp [] state thy = ("SKIP", state)
         val (s1, state1) = action_to_csp a state thy
         val (s2, state2) = action_list_to_csp rest state1 thy
       in
-        (s1 ^ "→" ^ s2, state2)
+        if (a =SkipA) then 
+          (s2, state2)
+        else
+          (s1 ^ "→" ^ s2, state2)
       end
 
 and action_to_csp action state thy =
   case action of
-    SkipA => ("SKIP", state)
+   SkipA => ("SKIP", state)
   | LockA bdg => ("lock_" ^ Binding.name_of bdg ^ "!0", state)
   | UnlockA bdg => ("unlock_" ^ Binding.name_of bdg ^ "!0", state)
   | AssignA (bdg, term) =>
@@ -1209,13 +1211,7 @@ and action_to_csp action state thy =
       in
         ("(µ X. If " ^ val_str ^ " Then(" ^ body_code ^ " -> X) Else (SKIP) )", state)
       end
-  | SeqA (a1, a2) =>
-      let
-        val (s1, state1) = action_to_csp a1 state thy
-        val (s2, state2) = action_to_csp a2 state1 thy
-      in
-        (s1 ^ "→" ^ s2, state2)
-      end
+
 
     (* Conversion d’un thread vers CSP *)
         fun thread_to_csp globals_decls (thread : thread_absy) thy : string =
@@ -1284,6 +1280,75 @@ val _ =
 
 ›
 
+ML ‹
+fun quote s = "\"" ^ s ^ "\""
+
+fun replicate_string 0 _ = ""
+  | replicate_string n s = s ^ replicate_string (n-1) s
+
+fun indent n = replicate_string n "  "
+
+fun show_action n action =
+  if n > 20 then indent n ^ "..." (* prevent stack overflow on deep nesting *)
+  else
+    let
+      val pad = indent n
+    in
+      case action of
+        SkipA => pad ^ "Skip"
+      | AssignA (b, t) => pad ^ "Assign(" ^ Binding.name_of b ^ ", " ^ Syntax.string_of_term_global @{theory} t ^ ")"
+      | LockA b => pad ^ "Lock(" ^ Binding.name_of b ^ ")"
+      | UnlockA b => pad ^ "Unlock(" ^ Binding.name_of b ^ ")"
+      | SendA (b, t) => pad ^ "Send(" ^ Binding.name_of b ^ ", " ^ Syntax.string_of_term_global @{theory} t ^ ")"
+      | ReceiveA (b1, b2) => pad ^ "Receive(" ^ Binding.name_of b1 ^ ", " ^ Binding.name_of b2 ^ ")"
+      | IfelseA ((cond, thens), elses) =>
+          pad ^ "If(" ^ Syntax.string_of_term_global @{theory} cond ^ ")\n" ^
+          pad ^ "Then:\n" ^ String.concatWith "\n" (map (show_action (n+1)) thens) ^
+          "\n" ^ pad ^ "Else:\n" ^ String.concatWith "\n" (map (show_action (n+1)) elses)
+      | WhileA (cond, body) =>
+          pad ^ "While(" ^ Syntax.string_of_term_global @{theory} cond ^ ")\n" ^
+          String.concatWith "\n" (map (show_action (n+1)) body)
+      | SeqA (a1, a2) =>
+          pad ^ "Seq:\n" ^ show_action (n+1) a1 ^ "\n" ^ show_action (n+1) a2
+    end
+
+fun visualize_absy (absy: absy) : string =
+  let
+    val sys_name = Binding.name_of (#system absy)
+    val threads = #threads_decls absy
+    fun show_thread t =
+      let
+        val name = Binding.name_of (#nom_thread t)
+        val actions = #actions t
+        val body = String.concatWith "\\\\\n" (map (show_action 1) actions)
+      in
+        "\\fbox{\\begin{minipage}{0.45\\textwidth}\\textbf{" ^ name ^ "}\\\\\\\\" ^ body ^ "\\end{minipage}}"
+      end
+  in
+    "\\noindent\\textbf{SYSTEM " ^ sys_name ^ "}\\\\\\\\\n" ^
+    String.concatWith "\\\\\\\\\n\\\\\\\\\n" (map show_thread threads)
+  end
+
+val _ =
+  Theory.setup
+    (Document_Output.antiquotation_verbatim_embedded \<^binding>‹show_ast›
+      (Scan.succeed ())
+      (fn ctxt => fn () =>
+        case !SPY of
+          SOME absy => visualize_absy absy
+        | NONE => "<No parsed system available>"))
+›
+text ‹
+  \usepackage{amsmath} % ensure in document preamble
+  \usepackage{framed}   % for minipage and fbox layout
+  \usepackage{graphicx} % optional scaling
+  This is the AST of the last SYSTEM:
+›
+
+
+section‹Tests›
+
+
 SYSTEM WellTypedSys
   globals v:‹bool› = ‹True› x:‹bool› = False var1:‹int› 
   locks   l:‹()›                                       
@@ -1350,5 +1415,6 @@ SYSTEM S
                   SKIP;
                DONE
 end;
+
 
 end
