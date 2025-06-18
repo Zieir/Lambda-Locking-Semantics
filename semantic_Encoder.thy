@@ -1261,52 +1261,6 @@ and action_to_csp action state thy =
 
 section‹Semantic Encoding›
 (**************************En travaux***********************)
-(*definition SKIP_process :: "(sema_evs + glo_vars_ev) process"
-  where "SKIP_process ≡ Skip"
-ML‹
-
-  (* Convertir une liste de a_term en une seule commande de type com *)
-fun sequence_actions [] = SkipA
-  | sequence_actions [a] = a
-  | sequence_actions (a :: rest) = SeqA (a, sequence_actions rest)
-
-(* Conversion d’une action abstraite (a_term) vers le terme logique com *)
-fun quote_com SkipA =
-      @{term "SKIP :: com"}  
-    | quote_com (AssignA (b, e)) =
-      let
-        val var_str = HOLogic.mk_string (Binding.name_of b)
-      in
-        @{term assign} $ var_str $ e
-      end
-  | quote_com (SeqA (c1, c2)) =
-      @{term seq} $ quote_com c1 $ quote_com c2
-  | quote_com (LockA b) =
-      let val n = HOLogic.mk_number @{typ int} (Int.fromString (Binding.name_of b) |> the)
-      in @{term lock} $ n end
-  | quote_com (UnlockA b) =
-      let val n = HOLogic.mk_number @{typ int} (Int.fromString (Binding.name_of b) |> the)
-      in @{term unlock} $ n end
-  | quote_com (SendA (sv, e)) =
-      let val sv_str = HOLogic.mk_string (Binding.name_of sv)
-      in @{term send} $ e $ sv_str end
-  | quote_com (ReceiveA (v, sv)) =
-      let
-        val v_str = HOLogic.mk_string (Binding.name_of v)
-        val sv_str = HOLogic.mk_string (Binding.name_of sv)
-      in
-        @{term rec} $ v_str $ sv_str
-      end
-  | quote_com (IfelseA ((cond, then_branch), else_branch)) =
-      @{term cond} $ cond
-                  $ quote_com (sequence_actions then_branch)
-                  $ quote_com (sequence_actions else_branch)
-  | quote_com (WhileA (cond, body)) =
-      @{term while} $ cond
-                    $ quote_com (sequence_actions body)
-
-›*)
-section‹Semantic Encoding›
 
 definition SKIP_process :: "(sema_evs + glo_vars_ev) process"
   where "SKIP_process ≡ Skip"
@@ -1317,15 +1271,36 @@ fun sequence_actions [] = SkipA
   | sequence_actions [a] = a
   | sequence_actions (a :: rest) = SeqA (a, sequence_actions rest)
 
+fun subst_vars_with_env (env : term) (t : term) : term =
+  let
+    fun subst (t : term) =
+      case t of
+        Free (name, _) =>
+          (* Replace x with env $ HOLogic.mk_string "x" *)
+          env $ HOLogic.mk_string name
+      | Const _ => t
+      | Bound _ => t
+      | Var _ => t
+      | Abs (n, T, body) => Abs (n, T, subst body)
+      | t1 $ t2 => subst t1 $ subst t2
+  in
+    subst t
+  end
+
 (* Conversion d'une action abstraite (a_term) vers le terme logique com *)
 fun quote_com SkipA =
       @{term "SKIP :: com"}  
   | quote_com (AssignA (b, e)) =
-      let
-        val var_str = HOLogic.mk_string (Binding.name_of b)
-      in
-        @{term assign} $ var_str $ e
-      end
+    let
+      val var_str = HOLogic.mk_string (Binding.name_of b)
+
+      val sigma = Free ("σ", @{typ "string ⇒ nat"})
+      val e' = subst_vars_with_env sigma e
+      val lam = Abs ("σ", @{typ "string ⇒ nat"}, e')
+
+    in
+      @{term assign} $ var_str $ lam
+    end
   | quote_com (SeqA (c1, c2)) =
       @{term seq} $ quote_com c1 $ quote_com c2
   | quote_com (LockA b) =
@@ -1359,12 +1334,31 @@ fun quote_com SkipA =
         @{term "rec :: string ⇒ string ⇒ com"} $ v_str $ sv_str
       end
   | quote_com (IfelseA ((cond, then_branch), else_branch)) =
-      @{term cond} $ cond
-                  $ quote_com (sequence_actions then_branch)
-                  $ quote_com (sequence_actions else_branch)
+    let
+      val sigma = Free ("σ", @{typ "string ⇒ bool"})
+
+      val cond' = subst_vars_with_env sigma cond
+      val cond_lam = Abs ("σ", @{typ "string ⇒ bool"}, cond')
+
+     
+    in
+      @{term cond} $ cond_lam 
+                   $ quote_com (sequence_actions then_branch)
+                   $ quote_com (sequence_actions else_branch)
+    end
+      
   | quote_com (WhileA (cond, body)) =
-      @{term while} $ cond
-                    $ quote_com (sequence_actions body)
+         let
+            val sigma = Free ("σ", @{typ "string ⇒ bool"})
+      
+            val cond' = subst_vars_with_env sigma cond
+            val cond_lam = Abs ("σ", @{typ "string ⇒ bool"}, cond')
+      
+           
+          in
+            @{term while} $ cond_lam 
+                         $ quote_com (sequence_actions body)
+          end
 ›
 
 ML‹
@@ -1444,7 +1438,7 @@ fun generate_terms (absy_data : absy) (thy : theory) : theory =
       case t of
         Const (@{const_name "Groups.zero_class.zero"}, _) => 0
       | Const (@{const_name "Groups.one_class.one"}, _) => 1
-      | _ => 0  (* Évaluation simplifiée,TODO *)
+      | x => state x  (* Évaluation simplifiée,TODO *)
 
     (* Fonction pour convertir une action en terme *)
     fun action_to_term (action : a_term)
@@ -1553,19 +1547,14 @@ val _ =
             val com_ast = sequence_actions actions
             val com_term = quote_com com_ast
             val cont = Abs ("s", @{typ σ}, @{term "SKIP_process"})
-            val sem_term = @{const Sem⇩0} $ com_term $ cont
             
             val _ = writeln ("=== Thread: " ^ name ^ " ===")
             val _ = writeln ("Command term:")
             val _ = writeln ("  " ^ Syntax.string_of_term_global thy_sem com_term)
-            val _ = writeln ("Semantic term:")  
-            val _ = writeln ("  " ^ Syntax.string_of_term_global thy_sem sem_term)
             val _ = writeln ("Suggested definition:")
             val _ = writeln ("definition " ^ name ^ "_cmd :: com where")
             val _ = writeln ("  \"" ^ name ^ "_cmd = " ^ Syntax.string_of_term_global thy_sem com_term ^ "\"")
-            val _ = writeln ("definition " ^ name ^ "_sem :: \"σ ⇒ (sema_evs + glo_vars_ev) process\" where")
-            val _ = writeln ("  \"" ^ name ^ "_sem = " ^ Syntax.string_of_term_global thy_sem sem_term ^ "\"")
-            val _ = writeln ""
+         
           in
             ()
           end
@@ -1574,7 +1563,7 @@ val _ =
         val _ = List.app process_thread (#threads_decls checked)
 
         val thy' = Local_Theory.exit_global lthy
-
+                          
        (* val _ = Output.writeln "=== CSP CODE GENERATION ==="
         val csp_code = generate_csp_code checked thy'
         val _ = Output.writeln ("Generated CSP: " ^ csp_code)
@@ -1590,13 +1579,13 @@ section‹Tests›
 SYSTEM S
   globals v :nat= ‹4::nat› x :bool = True val_test : nat = ‹5::nat›
   locks   l: nat
-  thread t :
+  (*thread t :
        any var_local:‹nat›
        actions 
         SKIP; 
         LOCK 4;
         v->‹val_test›;
-  thread m:
+  *)thread m:
        any var_local :int = ‹4 :: int›  test : int = ‹-3 ::int›
        actions SKIP;
        var_local = ‹(4+42) :: int›;
@@ -1614,7 +1603,7 @@ end;
 
 SYSTEM WellTypedSys
   globals v:‹bool› = ‹True› x:‹bool› = False var1:‹int› 
-  locks   l:‹()›                                       
+  locks   l:‹()›    l2:‹()›                                   
   thread t1 : 
          any y : ‹int› = ‹36 :: int›
          actions 
@@ -1624,9 +1613,9 @@ SYSTEM WellTypedSys
          UNLOCK l;
          IF ‹x› THEN 
             WHILE x DO 
-              LOCK l;
+              LOCK l2;
               SKIP;
-              UNLOCK l;                                                         
+              UNLOCK l2;                                                         
             DONE 
          ELSE
             SKIP;
