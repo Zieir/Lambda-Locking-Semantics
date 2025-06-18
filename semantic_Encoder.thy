@@ -1331,18 +1331,20 @@ fun quote_com SkipA =
   | quote_com (LockA b) =
       let 
         val n_str = Binding.name_of b
-        val n = case Int.fromString n_str of
+        val n = HOLogic.mk_number @{typ nat} (get_lock_id n_str)
+        (*val n = case Int.fromString n_str of
                   SOME i => HOLogic.mk_number @{typ nat} i
-                | NONE => error ("Invalid lock number: " ^ n_str)
+                | NONE => error ("Invalid lock number: " ^ n_str)*)
       in 
         @{term "com.lock :: int ⇒ com"} $ n 
       end
   | quote_com (UnlockA b) =
       let 
         val n_str = Binding.name_of b
-        val n = case Int.fromString n_str of
+       val n = HOLogic.mk_number @{typ nat} (get_lock_id n_str)
+        (*val n = case Int.fromString n_str of
                   SOME i => HOLogic.mk_number @{typ nat} i
-                | NONE => error ("Invalid unlock number: " ^ n_str)
+                | NONE => error ("Invalid unlock number: " ^ n_str)*)
       in 
         @{term "com.unlock :: int ⇒ com"} $ n 
       end
@@ -1442,7 +1444,7 @@ fun generate_terms (absy_data : absy) (thy : theory) : theory =
       case t of
         Const (@{const_name "Groups.zero_class.zero"}, _) => 0
       | Const (@{const_name "Groups.one_class.one"}, _) => 1
-      | _ => 0  (* Évaluation simplifiée, à étendre selon les besoins *)
+      | _ => 0  (* Évaluation simplifiée,TODO *)
 
     (* Fonction pour convertir une action en terme *)
     fun action_to_term (action : a_term)
@@ -1479,9 +1481,12 @@ fun generate_terms (absy_data : absy) (thy : theory) : theory =
       | LockA name =>
           let
             val n_str = Binding.name_of name
+            val n = HOLogic.mk_number @{typ nat} (get_lock_id n_str)
+
+(*
             val n = case Int.fromString n_str of
                       SOME i => HOLogic.mk_number @{typ nat} i
-                    | NONE => error ("Invalid lock number: " ^ n_str)
+                    | NONE => error ("Invalid lock number: " ^ n_str)*)
             val lock_term = @{term lock} $ n
           in
             (lock_term, state)
@@ -1619,7 +1624,8 @@ SYSTEM WellTypedSys
          UNLOCK l;
          IF ‹x› THEN 
             WHILE x DO 
-              LOCK l; 
+              LOCK l;
+              SKIP;
               UNLOCK l;                                                         
             DONE 
          ELSE
@@ -1652,7 +1658,7 @@ end;
 
 
 ML‹
-
+val temp = \<^term>‹t2_sem›
 
 
 fun replace_all _ _ "" = ""
