@@ -1666,11 +1666,13 @@ val _ =
           let
             val name      = Binding.name_of nom_thread
             val const_bnd = Binding.name (name ^ "_cmd")
-
+            
+            
             (* AST  →  terme  com  (déjà bien typé) *)
             val com_ast  = sequence_actions actions
-            val com_term = quote_com com_ast           (* ❶ plus de Type.constraint *)
-
+            val com_term  = quote_com com_ast
+            val _ = if fastype_of com_term = @{typ com} then ()
+                    else error ("Thread "^name^": term not of type com")
             (* définition :  const_bnd ≡ com_term *)
             val ((_, thm), lthy') =
                   Local_Theory.define ((const_bnd, NoSyn),
@@ -1789,15 +1791,13 @@ SYSTEM WellTypedSys
         var1 -> ‹y :: int›;
 
 thread t2 :
-         any var2:‹nat› = ‹(4+6) :: nat› y : ‹nat› = ‹28 :: nat›
+         any var2:‹nat› = ‹(4+6) :: nat› y : ‹int› = ‹28 :: int›
          actions 
          SKIP;
          LOCK l;
-         (*v ->‹3=2›;
-         v ->‹True›;
-         v ->‹False›;*)
+
          UNLOCK l;
-         IF ‹3 = 5› THEN 
+         IF ‹3 = (5:: int)› THEN 
             WHILE ‹x -(8 ::int) < x › DO 
               LOCK l; 
               UNLOCK l;
