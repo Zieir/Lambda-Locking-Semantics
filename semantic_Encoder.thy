@@ -431,7 +431,7 @@ datatype com =
 
 (* Table de mapping pour les locks *)
 val lock_table = Unsynchronized.ref (Symtab.empty : int Symtab.table)
-val lock_counter = Unsynchronized.ref 0
+val lock_counter = Unsynchronized.ref 1
 
 fun get_lock_id (lock_name : string) : int =
   case Symtab.lookup (!lock_table) lock_name of
@@ -1807,7 +1807,32 @@ val _ =
           val _ = writeln ("[SYSTEM]  réseau GLOBALVARS :\n  " ^
                            Syntax.string_of_term_global thy' globals_net_term)
           (* ---------------------------------------------------------------- *)
+          (* 3.  Construction du réseau SEMAPHORES -------------------------------- *)
+          
+          (* extraire les noms de verrous depuis checked *)
 
+          val lock_ids_terms : term list =
+            map (fn (b, _, _) =>
+                   HOLogic.mk_number @{typ int} (get_lock_id (Binding.name_of b)))  (* get_lock_id : binding -> int *)
+                (#locks_decls checked)
+          
+          val locks_list_term =
+            HOLogic.mk_list @{typ int} lock_ids_terms
+          
+          val locks_mset_term =
+            Cspm_API.mk_mset locks_list_term  (* {# … #} *)
+          
+          val SEMAPHORES_const =
+            Const (@{const_name SEMAPHORES}, @{typ int} --> procT)
+          
+          val lam_SEMAPHORES =
+            Abs ("idx", @{typ int}, SEMAPHORES_const $ Bound 0)
+          
+          val semaphores_net_term =
+            Cspm_API.mk_MultiInter_ sumT locks_mset_term lam_SEMAPHORES
+          
+          val _ = writeln ("[SYSTEM]  réseau SEMAPHORES :\n  " ^
+                           Syntax.string_of_term_global thy' semaphores_net_term)
         in
           thy'
         end)))
