@@ -636,7 +636,7 @@ fun sem_cps SKIP cont =
       end)
   | sem_cps (Load (x, y)) cont =
     (fn state =>
-      let
+      let         
         val v = safe_lookup y state
         val new_state = update_state state x v
       in
@@ -1015,6 +1015,7 @@ fun semantic_check (absy_data : absy) (thy : theory) : theory =
         val com_program = convert_to_com thy actions varstab locstab
 
         val initial_state = build_initial_state_for_thread globals_decls locals_decl thy
+
         val cps_trace = sem_cps com_program (fn _ => []) initial_state
 
         val _ = message false (" ✓ CPS-style trace for " ^ thread_name ^ ":")
@@ -1081,38 +1082,51 @@ fun semantic_check (absy_data : absy) (thy : theory) : theory =
     
     val _ = check_lock_declarations ()
     
-    (* Vérifier que toutes les variables globales utilisées sont déclarées *)
-    fun check_global_var_declarations () =
+    fun check_var_declarations () =
       let
-        val declared_globals = map (fn (bdg, _, _, _) => Binding.name_of bdg) globals_decls
-        
-        fun extract_used_globals_from_thread (thread : thread_absy) =
+        (* ------------------ 1. Ensemble des noms globaux ---------------- *)
+        val global_names =
+          map (fn (bdg, _, _, _) => Binding.name_of bdg) globals_decls
+    
+        (* ------------------ 2. Noms locaux d’un thread ------------------ *)
+        fun local_names_of_thread ({locals_decl, ...} : thread_absy) : string list =
+          map (fn ((bdg, _), _) => Binding.name_of bdg) locals_decl
+    
+        (* ------------------ 3. Variables utilisées dans des actions ----- *)
+        fun extract_vars (actions : a_term list) : string list =
+          List.concat (map (fn action =>
+            case action of
+                AssignA  (bdg, _)        => [Binding.name_of bdg]
+              | SendA    (bdg, _)        => [Binding.name_of bdg]
+              | ReceiveA (lbdg, sbdg)    => [Binding.name_of lbdg,
+                                             Binding.name_of sbdg]
+              | IfelseA  ((_, t1), t2)   => extract_vars t1 @ extract_vars t2
+              | WhileA   (_, body)       => extract_vars body
+              | _                        => []) actions)
+    
+        (* ------------------ 4. Manquantes dans un thread donné ---------- *)
+        fun undeclared_in_thread (thr : thread_absy) : string list =
           let
-            fun extract_from_actions actions =
-              List.concat (map (fn action =>
-                case action of
-                  SendA (bdg, _) => [Binding.name_of bdg]
-                | ReceiveA (_, bdg) => [Binding.name_of bdg]
-                | IfelseA ((_, then_acts), else_acts) =>
-                    extract_from_actions then_acts @ extract_from_actions else_acts
-                | WhileA (_, body_acts) => extract_from_actions body_acts
-                | _ => []) actions)
+            val declared = global_names @ local_names_of_thread thr
+            val used     = extract_vars (#actions thr)
           in
-            extract_from_actions (#actions thread)
+            List.filter (fn v => not (List.exists (fn d => d = v) declared)) used
           end
-        
-        val used_globals = List.concat (map extract_used_globals_from_thread threads_decls)
-        val undeclared_globals = List.filter (fn used => 
-          not (List.exists (fn decl => decl = used) declared_globals)) used_globals
+    
+        (* ------------------ 5. Agrégation globale ----------------------- *)
+        val missing =
+          List.concat (map undeclared_in_thread threads_decls)
+          |> sort_distinct string_ord
       in
-        if null undeclared_globals then
-          message false "✓ All used global variables are properly declared"
+        if null missing then
+          message false "✓ All used variables are properly declared (globals or locals)"
         else
-          (message false "✗ Undeclared global variables used:";
-           map (fn var => message false ("  " ^ var)) undeclared_globals; ())
+          (message false "✗ Undeclared variables (neither global nor local):";
+           List.app (fn v => message false ("  " ^ v)) missing)
       end
     
-    val _ = check_global_var_declarations ()
+    (* Appel de la vérification dans semantic_check ---------------------- *)
+    val _ = check_var_declarations ()
     
     val _ = message false "=== SEMANTIC CHECK COMPLETED ==="
   in
@@ -1129,7 +1143,7 @@ fun semantics (absy_cl: theory -> absy) (thy : theory) =
 fun sequence_actions [] = SkipA
   | sequence_actions [a] = a
   | sequence_actions (a::rest) = SeqA (a, sequence_actions rest)
-
+(*
 (*Fonction pour générer le code CSP complet *)
 fun generate_csp_code (absy_data : absy) (thy : theory) : string =
 let
@@ -1255,7 +1269,7 @@ and action_to_csp action state thy =
       generate_system ()
     ]
   end
-
+*)
 
 ›
 
@@ -1380,7 +1394,7 @@ fun quote_com SkipA =
   | quote_com (LockA b) =
       let 
         val n_str = Binding.name_of b
-        val n = HOLogic.mk_number @{typ nat} (get_lock_id n_str)
+        val n = HOLogic.mk_number @{typ int} (get_lock_id n_str)
         (*val n = case Int.fromString n_str of
                   SOME i => HOLogic.mk_number @{typ nat} i
                 | NONE => error ("Invalid lock number: " ^ n_str)*)
@@ -1390,7 +1404,7 @@ fun quote_com SkipA =
   | quote_com (UnlockA b) =
       let 
         val n_str = Binding.name_of b
-       val n = HOLogic.mk_number @{typ nat} (get_lock_id n_str)
+       val n = HOLogic.mk_number @{typ int} (get_lock_id n_str)
         (*val n = case Int.fromString n_str of
                   SOME i => HOLogic.mk_number @{typ nat} i
                 | NONE => error ("Invalid unlock number: " ^ n_str)*)
@@ -1403,7 +1417,7 @@ fun quote_com SkipA =
         val expr = subst_with_sigma e  (* ou autre expression contenant σ ''x'' *)
         val lam = make_lambda_sigma @{typ "string ⇒ int"} "σ" expr
       in 
-        @{term "send :: (σ ⇒ nat) ⇒ string ⇒ com"} $ lam $ sv_str
+        @{term "send :: (σ ⇒ int) ⇒ string ⇒ com"} $ lam $ sv_str
        end
 
   | quote_com (ReceiveA (v, sv)) =
@@ -1454,7 +1468,8 @@ fun declare_thread_terms (thy: theory) (threads: thread_absy list)
       (* Convert actions into com *)
       val com_ast = sequence_actions actions
       val com_term = quote_com com_ast
-
+      val com_term = Type.constraint @{typ com} com_term
+  
       (* Create a simple definition: thread_name_term = com_term *)
       val lthy = Named_Target.theory_init thy'
       val ((_, term_def), lthy') =
@@ -1555,7 +1570,7 @@ fun generate_terms (absy_data : absy) (thy : theory) : theory =
       | LockA name =>
           let
             val n_str = Binding.name_of name
-            val n = HOLogic.mk_number @{typ nat} (get_lock_id n_str)
+            val n = HOLogic.mk_number @{typ int} (get_lock_id n_str)
 
 (*
             val n = case Int.fromString n_str of
@@ -1569,7 +1584,7 @@ fun generate_terms (absy_data : absy) (thy : theory) : theory =
       | UnlockA name =>
           let
             val n_str = Binding.name_of name
-            val n = HOLogic.mk_number @{typ nat} (get_lock_id n_str)
+            val n = HOLogic.mk_number @{typ int} (get_lock_id n_str)
             (*val n = case Int.fromString n_str of
                       SOME i => HOLogic.mk_number @{typ nat} i
                     | NONE => error ("Invalid unlock number: " ^ n_str)*)
@@ -1604,6 +1619,25 @@ fun generate_terms (absy_data : absy) (thy : theory) : theory =
   in
     thy'
   end
+
+fun define_cmd (const_name : string) (rhs : term) (thy : theory) : theory =
+  let
+    val bname  = Binding.name const_name           (* nom de la constante *)
+    val lthy   = Named_Target.theory_init thy      (* entrée en contexte local *)
+
+    (*   definition const_name where "const_name = rhs"   *)
+    val ((_, def_thm), lthy') =
+      Local_Theory.define ((bname, NoSyn), ((Binding.empty, []), rhs)) lthy
+
+    val thy'   = Local_Theory.exit_global lthy'    (* on ressort en théorie *)
+
+    val _ = writeln ("✓ defined “" ^ const_name ^ "” : " ^
+                     Syntax.string_of_typ_global thy' (fastype_of rhs))
+    val _ = writeln ("    " ^ Syntax.string_of_term_global thy' rhs)
+    val _ = writeln ("    theorem: " ^ Thm.string_of_thm_global thy' (snd def_thm))
+  in
+    thy'
+  end
 ›
 
 (**********************************************************)
@@ -1611,7 +1645,54 @@ fun generate_terms (absy_data : absy) (thy : theory) : theory =
 
 section‹Impression›
 ML‹
+val defini = (fn (((decl, spec), prems), params) =>
+        #2 oo Specification.definition_cmd decl params prems spec) 
+
 val _ =
+  Outer_Syntax.command \<^command_keyword>‹SYSTEM› "defines System Specification"
+    (parse_system_spec >>
+     (fn system_data => Toplevel.theory (fn thy =>
+      let
+        (* 1. vérifications syntactiques et sémantiques ---------------- *)
+        val checked = context_check system_data thy
+        val thy_sem = semantic_check checked thy
+
+        (* 2. on passe en contexte local pour ajouter les constantes --- *)
+        val lthy0 = Named_Target.theory_init thy_sem
+
+        (* 3. pour chaque thread, définir  <thread>_cmd ---------------- *)
+        fun define_cmd ({nom_thread, actions, ...} : thread_absy)
+                       (lthy : local_theory) : local_theory =
+          let
+            val name      = Binding.name_of nom_thread
+            val const_bnd = Binding.name (name ^ "_cmd")
+
+            (* AST  →  terme  com  (déjà bien typé) *)
+            val com_ast  = sequence_actions actions
+            val com_term = quote_com com_ast           (* ❶ plus de Type.constraint *)
+
+            (* définition :  const_bnd ≡ com_term *)
+            val ((_, thm), lthy') =
+                  Local_Theory.define ((const_bnd, NoSyn),
+                                       ((Binding.empty, []), com_term)) lthy
+
+            val _ = writeln ("✓ defined «" ^ name ^ "_cmd»")
+          in
+            lthy'
+          end
+
+        (* 4. on applique à tous les threads --------------------------- *)
+        val lthy_final =
+          fold define_cmd (#threads_decls checked) lthy0
+
+        (* 5. retour en théorie globale -------------------------------- *)
+        val thy' = Local_Theory.exit_global lthy_final
+
+      in
+        thy'
+      end)))
+
+(*val _ =
   Outer_Syntax.command \<^command_keyword>‹SYSTEM› "defines System Specification"
     (parse_system_spec >>
      (fn system_data => Toplevel.theory (fn thy =>
@@ -1630,11 +1711,21 @@ val _ =
             
            (* val _ = writeln ("=== Thread: " ^ name ^ " ===")
             val _ = writeln ("Command term:")*)
+            val cmd_bname = Binding.name (name ^ "_cmd")
+            val lthy2 = Named_Target.theory_init thy_sem
+
+             (*  val definition_cmd: (binding * string option * mixfix) option ->
+    (binding * string option * mixfix) list -> string list -> Attrib.binding * string ->
+    bool -> local_theory -> (term * (string * thm)) * local_theory*)
+
+
+
+            val _ = writeln ("✓ Defined constant: " ^ Binding.name_of cmd_bname)
+            
             val _ = writeln ("  " ^ Syntax.string_of_term_global thy_sem com_term)
             val _ = writeln ("Suggested definition:")
             val _ = writeln ("definition " ^ name ^ "_cmd  where")
             val _ = writeln ("  \"" ^ name ^ "_cmd = " ^ Syntax.string_of_term_global thy_sem com_term ^ "\"")
-            val t = com_term
           in
             ()
           end
@@ -1649,30 +1740,23 @@ val _ =
         val _ = Output.writeln ("Generated CSP: " ^ csp_code)
 *)
       in thy' end)))
-
+*)
 ›
-
 
 
 section‹Tests›
 
 SYSTEM S
-  globals v :nat= ‹4::nat› x :bool = True val_test : nat = ‹5::nat›
+  globals v :nat= ‹4::nat› x :int = ‹5 ::int› val_test : nat = ‹5::nat›
   locks   l: nat
-  (*thread t :
-       any var_local:‹nat›
-       actions 
-        SKIP; 
-        LOCK 4;
-        v->‹val_test›;
-  *)thread m:
-       any var_local :int = ‹4 :: int›  test : int = ‹-3 ::int›
+thread m:
+       any test :int = ‹-3 ::int›  var_local :int = ‹4 :: int›   
        actions SKIP;
-       var_local = ‹(4+42) :: int›;
+      var_local = ‹(4+42) :: int›;
       test = ‹2* var_local :: int›;
       test = ‹test+3 :: int›;
-      IF ‹x› THEN 
-                  WHILE ‹x› DO 
+      IF ‹x > (6 :: int)› THEN 
+                  WHILE ‹x > (2 :: int)› DO 
                     test = ‹test-3 :: int›;
                   DONE 
                ELSE
@@ -1682,18 +1766,17 @@ end;
 
 
 SYSTEM WellTypedSys
-  globals v:‹bool› = ‹True› x:‹bool› = False var1:‹int› 
+  globals x:‹int› = ‹3 :: int› var1:‹int› 
   locks   l:‹()›    l2:‹()›                                   
   thread t1 : 
          any y : ‹int› = ‹36 :: int›
          actions 
          SKIP;
          LOCK l;
-         v ->‹False›;  
           y <- var1;
          UNLOCK l;
-         IF ‹var1>3› THEN 
-            WHILE ‹var1>3› DO 
+         IF ‹var1>(3:: int)› THEN 
+            WHILE ‹var1>(3:: int)› DO 
               LOCK l2;
               SKIP;
               UNLOCK l2;                                                         
@@ -1715,142 +1798,20 @@ thread t2 :
          v ->‹False›;*)
          UNLOCK l;
          IF ‹3 = 5› THEN 
-            WHILE ‹2 -8 < 5 › DO 
+            WHILE ‹x -(8 ::int) < x › DO 
               LOCK l; 
               UNLOCK l;
             DONE 
          ELSE
             SKIP;
          DONE
-        y = ‹var2 + 3 :: nat›; 
+        y = ‹var2 + 3 :: int›; 
 
 end;
-
-
 ML‹
-val temp = \<^term>‹t2_sem›
-
-
-fun replace_all _ _ "" = ""
-  | replace_all target replacement input =
-      if String.isPrefix target input
-      then replacement ^ replace_all target replacement (String.extract (input, String.size target, NONE))
-      else String.str (String.sub (input, 0)) ^ replace_all target replacement (String.extract (input, 1, NONE))
-
-fun escape_latex_string s =
-  s
-  (*|> replace_all "\\" "\\textbackslash{}"*)
-  |> replace_all "_" "\\_"
-  |> replace_all "%" "\\%"
-  |> replace_all "&" "\\&"
-  |> replace_all "{" "\\{"
-  |> replace_all "}" "\\}"
-  |> replace_all "^" "\\^{} "
-  |> replace_all "~" "\\~{} "
-  |> replace_all "¬" " \\neg "
-  |> replace_all "µ" " \\mu "
-  |> replace_all "→" " \\rightarrow "
-
-
-val trim = Library.trim_line
-
-
-
-
-
-
-
-fun visualize_csp_threads_simple (absy: absy) (thy: theory) : string =
-  let
-    val      {system          : binding,
-             globals_decls   : (binding * typ * Position.T * term option) list,
-             varstab         : (term option) Symtab.table,
-             locks_decls     : (binding * term * Position.T) list,
-             threads_decls   : thread_absy list
-            }
-            = absy 
-    val sys_name = Binding.name_of system
-    val full_csp = generate_csp_code absy thy
-    val lines = String.tokens (fn c => c = #"\n") full_csp
- open Latex
-    fun is_thread_definition line =
-      String.isSubstring " = " line andalso
-      not (String.isSubstring "channel" line) andalso
-      not (String.isSubstring "-- " line) andalso
-      not (String.isSubstring " ||| " line) andalso
-      line <> ""
-
-    fun to_box line =
-      case String.tokens (fn c => c = #"=") line of
-        [lhs, rhs] =>
-          let
-            val name = trim lhs
-            val body = trim rhs
-            val escaped_name = escape_latex_string name
-            val escaped_body = escape_latex_string (name ^ " = " ^ body)
-          in
-            "\\fbox{\\begin{minipage}[t]{0.9\\textwidth}\n" ^
-            "\\centering\n" ^
-            "\\textbf{" ^ escaped_name ^ "} \\\\\n" ^
-            "\\texttt{" ^ escape_latex_string body ^ "}\n" ^
-            "\\end{minipage}}"
-          end
-      | _ => "% skipped malformed line"
-
-    val thread_boxes =
-      lines |> List.filter is_thread_definition |> map to_box 
-
-    fun show_global (bdg, T, _, init_opt) =
-      let
-        val name     = Binding.name_of bdg
-        val typ_str  = Syntax.string_of_typ_global thy T
-        val init_str =
-          (case init_opt of
-             NONE   => ""
-           | SOME t => " = " ^ Syntax.string_of_term_global thy t)  
-      in
-        "\\texttt{" ^
-        escape_latex_string (name ^ " : "  ^ init_str) ^
-        "}\\\\"
-      end
-
-    val globals_block =
-      if null globals_decls
-      then "\\texttt{(no globals)}"
-      else String.concatWith "\n" (map show_global globals_decls)
-
-
-    val pre_code =
-      "\\fbox{\\begin{minipage}[t]{0.9\\textwidth}\n" ^
-      "\\centering\n" ^
-      "\\textbf{System " ^ escape_latex_string sys_name ^ "}\\\\[4pt]\n" ^
-      globals_block ^ "\n" ^
-      "\\end{minipage}}"
-
-  in
-    String.concatWith "\n\n" (pre_code :: thread_boxes) 
- end
-
-val _ =
-  Theory.setup
-    (Document_Output.antiquotation_raw \<^binding>‹show_csp›
-      (Scan.succeed ())
-      (fn ctxt => fn () =>
-        case !SPY of
-           SOME absy =>  
-             let
-               val thy = Proof_Context.theory_of ctxt
-               val csp_display = visualize_csp_threads_simple absy thy
-             in
-                  Latex.string csp_display
-             end
-        | NONE => Latex.string "\\textit{No parsed system available.}"))
+val temp = \<^term>‹t2_cmd›
 ›
-(*>*)
-text ‹
-  This is the AST of the last SYSTEM: \\
-   @{show_csp}
-›
+
 
 
 
