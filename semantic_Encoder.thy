@@ -1398,8 +1398,14 @@ fun quote_com SkipA =
         @{term "com.unlock :: int ⇒ com"} $ n 
       end
   | quote_com (SendA (sv, e)) =
-      let val sv_str = HOLogic.mk_string (Binding.name_of sv)
-      in @{term "send :: (σ ⇒ nat) ⇒ string ⇒ com"} $ e $ sv_str end
+      let
+        val sv_str = HOLogic.mk_string (Binding.name_of sv)
+        val expr = subst_with_sigma e  (* ou autre expression contenant σ ''x'' *)
+        val lam = make_lambda_sigma @{typ "string ⇒ int"} "σ" expr
+      in 
+        @{term "send :: (σ ⇒ nat) ⇒ string ⇒ com"} $ lam $ sv_str
+       end
+
   | quote_com (ReceiveA (v, sv)) =
       let
         val v_str = HOLogic.mk_string (Binding.name_of v)
@@ -1683,7 +1689,8 @@ SYSTEM WellTypedSys
          actions 
          SKIP;
          LOCK l;
-         v ->‹False›;                                             
+         v ->‹False›;  
+          y <- var1;
          UNLOCK l;
          IF ‹var1>3› THEN 
             WHILE ‹var1>3› DO 
