@@ -1809,7 +1809,7 @@ thread t2 :
 
 end;
 ML‹
-val temp = \<^term>‹t2_cmd›
+val temp1 = \<^term>‹Sem(t1_cmd) ||| Sem(t2_cmd)›
 ›
 
 
