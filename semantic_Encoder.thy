@@ -1270,37 +1270,111 @@ ML‹
 fun sequence_actions [] = SkipA
   | sequence_actions [a] = a
   | sequence_actions (a :: rest) = SeqA (a, sequence_actions rest)
-
-fun subst_vars_with_env (env : term) (t : term) : term =
+(*
+fun subst_with_fresh_env (env_type : typ) (t : term) : term * term =
   let
-    fun subst (t : term) =
+    (* collect free variable names *)
+    val frees = Term.add_free_names t []
+
+    (* generate a fresh variable name "σ", adding primes if necessary *)
+    fun fresh_name base [] = base
+      | fresh_name base used =
+          let
+            fun bump n =
+              let val candidate = base ^ replicate_string n "'" in
+                if member (op =) used candidate then bump (n + 1) else candidate
+              end
+          in bump 1 end
+
+    val sigma_name = fresh_name "σ" frees
+    val sigma = Free (sigma_name, env_type)
+
+    (* perform substitution: Free(x) becomes sigma $ "x" *)
+    fun subst t =
       case t of
-        Free (name, _) =>
-          (* Replace x with env $ HOLogic.mk_string "x" *)
-          env $ HOLogic.mk_string name
+        Free (name, _) => sigma $ HOLogic.mk_string name
       | Const _ => t
       | Bound _ => t
       | Var _ => t
       | Abs (n, T, body) => Abs (n, T, subst body)
       | t1 $ t2 => subst t1 $ subst t2
+
+    val t_subst = subst t
+  in
+    (sigma, t_subst)
+  end
+*)
+
+val sigma : term = Free ("σ", @{typ "string ⇒ int"})   (* changer le type ici si besoin *)
+
+
+fun subst_with_sigma (t : term) : term =
+  let
+    fun subst tm =
+      case tm of
+        Free (name, _)           => sigma $ HOLogic.mk_string name
+      | Const _                  => tm
+      | Bound _                  => tm
+      | Var _                    => tm
+      | Abs (n, T, body)        => Abs (n, T, subst body)
+      | tm1 $ tm2               => subst tm1 $ subst tm2
   in
     subst t
   end
 
+fun lambda_sigma_apply_var (env_type : typ) (var_name : string) : term =
+  let
+    val bound_sigma = Bound 0
+    val body = bound_sigma $ HOLogic.mk_string var_name
+  in
+    Abs ("σ", env_type, body)
+  end
+
+(* 
+  Crée une abstraction λσ:typ. t
+  en remplaçant les Free("σ", typ) par Bound 0 dans t
+*)
+fun make_lambda_sigma (env_type : typ) (sigma_name : string) (t : term) : term =
+  let
+    fun subst tm =
+      case tm of
+        Free (n, T) => if n = sigma_name andalso T = env_type then Bound 0 else tm
+      | Const _ => tm
+      | Bound _ => tm
+      | Var _ => tm
+      | Abs (n, T, body) => Abs (n, T, subst body)
+      | t1 $ t2 => subst t1 $ subst t2
+  in
+    Abs (sigma_name, env_type, subst t)
+  end
 (* Conversion d'une action abstraite (a_term) vers le terme logique com *)
 fun quote_com SkipA =
       @{term "SKIP :: com"}  
-  | quote_com (AssignA (b, e)) =
+  (*| quote_com (AssignA (b, e)) =
     let
       val var_str = HOLogic.mk_string (Binding.name_of b)
 
-      val sigma = Free ("σ", @{typ "string ⇒ nat"})
-      val e' = subst_vars_with_env sigma e
+      val (sigma, e') = subst_with_fresh_env @{typ "string ⇒ int"} e
+      val lam = Abs (fst (Term.dest_Free sigma), @{typ "string ⇒ int"}, e')
       val lam = Abs ("σ", @{typ "string ⇒ nat"}, e')
 
     in
       @{term assign} $ var_str $ lam
+    end*)
+   (* | quote_com (AssignA (b, e)) =
+        let
+          val var_str = HOLogic.mk_string (Binding.name_of b)
+          val e'      = subst_with_sigma e               (* σ ''x'' … *)
+          val lam     = Abs ("σ", @{typ "string ⇒ int"}, e')*)
+| quote_com (AssignA (b, e)) =
+    let
+      val var_str = HOLogic.mk_string (Binding.name_of b)
+      val expr = subst_with_sigma e  (* ou autre expression contenant σ ''x'' *)
+      val lam = make_lambda_sigma @{typ "string ⇒ int"} "σ" expr
+    in
+      @{term assign} $ var_str $ lam
     end
+       
   | quote_com (SeqA (c1, c2)) =
       @{term seq} $ quote_com c1 $ quote_com c2
   | quote_com (LockA b) =
@@ -1335,28 +1409,28 @@ fun quote_com SkipA =
       end
   | quote_com (IfelseA ((cond, then_branch), else_branch)) =
     let
-      val sigma = Free ("σ", @{typ "string ⇒ bool"})
+     (* val (sigma, e') = subst_with_fresh_env @{typ "string ⇒ int"} cond
+         
+      val lam = Abs (fst (Term.dest_Free sigma), @{typ "string ⇒ int"}, e')*)
 
-      val cond' = subst_vars_with_env sigma cond
-      val cond_lam = Abs ("σ", @{typ "string ⇒ bool"}, cond')
-
-     
+      val expr = subst_with_sigma cond  (* ou autre expression contenant σ ''x'' *)
+      val lam = make_lambda_sigma @{typ "string ⇒ int"} "σ" expr
     in
-      @{term cond} $ cond_lam 
+      @{term cond} $ lam 
                    $ quote_com (sequence_actions then_branch)
                    $ quote_com (sequence_actions else_branch)
     end
       
   | quote_com (WhileA (cond, body)) =
          let
-            val sigma = Free ("σ", @{typ "string ⇒ bool"})
       
-            val cond' = subst_vars_with_env sigma cond
-            val cond_lam = Abs ("σ", @{typ "string ⇒ bool"}, cond')
-      
+(*val (sigma, e') = subst_with_fresh_env @{typ "string ⇒ int"} cond
+val lam = Abs (fst (Term.dest_Free sigma), @{typ "string ⇒ int"}, e')*)
+      val expr = subst_with_sigma cond  (* ou autre expression contenant σ ''x'' *)
+      val lam = make_lambda_sigma @{typ "string ⇒ int"} "σ" expr
            
           in
-            @{term while} $ cond_lam 
+            @{term while} $ lam 
                          $ quote_com (sequence_actions body)
           end
 ›
@@ -1548,13 +1622,13 @@ val _ =
             val com_term = quote_com com_ast
             val cont = Abs ("s", @{typ σ}, @{term "SKIP_process"})
             
-            val _ = writeln ("=== Thread: " ^ name ^ " ===")
-            val _ = writeln ("Command term:")
+           (* val _ = writeln ("=== Thread: " ^ name ^ " ===")
+            val _ = writeln ("Command term:")*)
             val _ = writeln ("  " ^ Syntax.string_of_term_global thy_sem com_term)
             val _ = writeln ("Suggested definition:")
-            val _ = writeln ("definition " ^ name ^ "_cmd :: com where")
+            val _ = writeln ("definition " ^ name ^ "_cmd  where")
             val _ = writeln ("  \"" ^ name ^ "_cmd = " ^ Syntax.string_of_term_global thy_sem com_term ^ "\"")
-         
+            val t = com_term
           in
             ()
           end
@@ -1611,8 +1685,8 @@ SYSTEM WellTypedSys
          LOCK l;
          v ->‹False›;                                             
          UNLOCK l;
-         IF ‹x› THEN 
-            WHILE x DO 
+         IF ‹var1>3› THEN 
+            WHILE ‹var1>3› DO 
               LOCK l2;
               SKIP;
               UNLOCK l2;                                                         
@@ -1629,12 +1703,12 @@ thread t2 :
          actions 
          SKIP;
          LOCK l;
-         v ->‹3=2›;
+         (*v ->‹3=2›;
          v ->‹True›;
-         v ->‹False›;
+         v ->‹False›;*)
          UNLOCK l;
-         IF ‹v› THEN 
-            WHILE ‹v› DO 
+         IF ‹3 = 5› THEN 
+            WHILE ‹2 -8 < 5 › DO 
               LOCK l; 
               UNLOCK l;
             DONE 
