@@ -172,7 +172,7 @@ section‹A Thread-System as HOL-CSPM-Architecture›
 
 text‹Now, wrapping all this up gives us:›
 
-definition "σ⇩0" :: "σ" where ‹σ⇩0 ≡ (λ _. 0)›                           
+(*definition "σ⇩0" :: "σ" where ‹σ⇩0 ≡ (λ _. 0)›                           
            ― ‹initial state of variables›
 
 definition SEMAPHORES where ‹SEMAPHORES idx ≡ Renaming (semaphore idx) Inl id›
@@ -182,9 +182,27 @@ definition GLOBALVARS where ‹GLOBALVARS idx ≡ Renaming (global_vars idx σ�
            ― ‹attention: global state uninitialized›
 (*Modifications*)
 definition LOCALVARS where
-  ‹LOCALVARS idx ≡ Renaming (locals_vars idx σ⇩0) Inr id›
+  ‹LOCALVARS idx ≡ Renaming (locals_vars idx σ⇩0) Inr id›*)
+
+definition SEMAPHORES where ‹SEMAPHORES idx ≡ Renaming (semaphore idx) Inl id›
+           ― ‹lifting semaphores to the global alphabet›   
+
+definition GLOBALVARS where
+  ‹GLOBALVARS idx σ⇩0 ≡ Renaming (global_vars idx σ⇩0) Inr id›
+
+definition LOCALVARS where
+  "LOCALVARS idx σ⇩0 ≡ Renaming (locals_vars idx σ⇩0) Inr id"
 
 text‹An example of a global ‹IMP⇩c⇩o⇩n⇩c⇩u⇩r›-System with 2 threads, 3 global variables and 4 semaphores:›
+definition my_initial_state :: σ where
+  "my_initial_state v ≡ if v = ''a'' then 3 else 0"
+
+term ‹( ❙|❙|❙| idx ∈# mset [''a'',''b'',''c''].  GLOBALVARS idx my_initial_state )
+      ⟦UNIV⟧ 
+      (Sem(Thread1) ||| Sem(Thread2))
+      ⟦UNIV⟧
+      ( ❙|❙|❙| idx ∈# mset [1..4]. SEMAPHORES idx )›
+(*
 term ‹( ❙|❙|❙| idx ∈# mset [''a'',''b'',''c''].  GLOBALVARS idx )
       ⟦UNIV⟧ 
       (Sem(Thread1) ||| Sem(Thread2))
@@ -198,7 +216,7 @@ ML‹
       ( ❙|❙|❙| idx ∈# mset [1..4]. SEMAPHORES idx )›  
  val temp2= \<^term>‹❙|❙|❙| idx ∈# mset [''a'',''b'',''c''].  GLOBALVARS idx›
 
-›
+›*)
 text‹TODO : A better approach to the tinkering with the renaming of alphabets would be locales ...›
 
 text‹Tests:›
