@@ -1965,10 +1965,11 @@ val _ =
           
                     val _ = writeln ("[SYSTEM]  réseau complet :\n  " ^
                                      Syntax.string_of_term_global thy' full_system_term)
-          
+
                   in
                     thy'
                   end)))
+
 
 (*This is working
 val _ =
@@ -2114,7 +2115,7 @@ thread t2 :
         y = ‹var2 + 3 :: int›; 
 thread t3:
        any test :int = ‹-3 ::int›  var_local :int = ‹4 :: int›   
-       actions SKIP;
+       actions 
       var_local = ‹(4+42) :: int›;
       test = ‹2* var_local :: int›;
       test = ‹test+3 :: int›;
