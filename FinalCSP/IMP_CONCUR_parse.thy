@@ -1679,8 +1679,7 @@ fun mk_sumT (T1, T2) = Type ("Sum_Type.sum", [T1, T2])
   end*)
 fun make_sigma_term (tab : term option Symtab.table) : term =
   let
-    val zero = @{term "0::int"}
-    val fvar = Free ("σ", Type ("fun", [@{typ string}, @{typ int}]))  (* ✅ OK *)
+    val fvar = Free ("σ", Type ("fun", [@{typ string}, @{typ int}])) 
     (* applique fun_upd : σ(x₁ := v₁)(x₂ := v₂)... *)
     fun apply_update (name, SOME value) acc =
           Syntax.const @{const_name fun_upd}
