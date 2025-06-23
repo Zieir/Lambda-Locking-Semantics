@@ -1915,8 +1915,6 @@ val _ =
 
             
           (* ---------------------------------------------------------------- *)
-
-          (* ======================  NOUVEAU  =============================== *)
           (* 2.  Construction du réseau GLOBALVARS ------------------------- *)
           val globals_names : term list =
             map (fn (b, _, _, _) => HOLogic.mk_string (Binding.name_of b)) (#globals_decls checked)
@@ -1941,6 +1939,23 @@ val _ =
           
           val _ = writeln ("[SYSTEM]  réseau GLOBALVARS :\n  " ^
                            Syntax.string_of_term_global thy' globals_net_term)
+        
+        (* 2.b Fonction pour générer un réseau LOCALVARS pour un thread *)
+        fun make_localvar_net thy ({nom_thread, locals_decl, ...} : thread_absy) : term =
+          let
+            val thread_name = Binding.name_of nom_thread
+            val local_var_names =
+              map (fn ((bdg,_),_) => HOLogic.mk_string (Binding.name_of bdg)) locals_decl
+            val mset_term = Cspm_API.mk_mset (HOLogic.mk_list @{typ string} local_var_names)
+        
+            (* LOCALVARSᵢ : string ⇒ procT *)
+            val localvars_const = Const (@{const_name LOCALVARS}, @{typ string} --> procT)
+            val lam = Abs ("v", @{typ string}, localvars_const $ Bound 0)
+        
+            val net = Cspm_API.mk_MultiInter_ sumT mset_term lam
+          in
+            net
+          end
           (* ---------------------------------------------------------------- *)
           (* 3.  Construction du réseau SEMAPHORES -------------------------------- *)
           
@@ -1969,15 +1984,14 @@ val _ =
           val _ = writeln ("[SYSTEM]  réseau SEMAPHORES :\n  " ^
                            Syntax.string_of_term_global thy' semaphores_net_term)
           (* 4. Construction du réseau des THREADS --------------------------- *)
-          val thread_names : string list =
+         (* val thread_names : string list =
             map (fn {nom_thread, ...} => Binding.name_of nom_thread) (#threads_decls checked)
 
-val thread_consts : term list =
-  map (fn name =>
-    Const (Sign.full_name thy (Binding.name (name ^ "_cmd")), @{typ com}))
-  thread_names
+          val thread_consts : term list =
+            map (fn name =>
+              Const (Sign.full_name thy (Binding.name (name ^ "_cmd")), @{typ com}))
+            thread_names
 
-          val sem_const = Const (@{const_name Sem}, @{typ com} --> procT)
 
           val thread_processes : term list =
             map (fn t => sem_const $ t) thread_consts
@@ -1986,11 +2000,66 @@ val thread_consts : term list =
             (case thread_processes of
                 [] => error "No threads declared"
               | [t] => t
-              | ts => foldr1 (fn (t1, t2) => Cspm_API.mk_Inter t1 t2) ts)
+              | ts => foldr1 (fn (t1, t2) => Cspm_API.mk_Inter t1 t2) ts)*)
+
+          val sem_const = Const (@{const_name Sem}, @{typ com} --> procT)
+
+(* A.  noms des threads ------------------------------------------------ *)
+val thread_names : string list =
+  map (fn {nom_thread, ...} => Binding.name_of nom_thread)
+      (#threads_decls checked)
+
+(* B.  constantes  ti_cmd  -------------------------------------------- *)
+val thread_consts : term list =
+  map (fn n =>
+        Const (Sign.full_name thy (Binding.name (n ^ "_cmd")), @{typ com}))
+      thread_names
+
+(* C.  fabrique le réseau LOCALVARS pour un thread donné --------------- *)
+fun localvars_net ({locals_decl, ...} : thread_absy) : term =
+  let
+    val names =
+      map (fn ((bdg,_),_) => HOLogic.mk_string (Binding.name_of bdg))
+          locals_decl
+  in
+    if null names
+    then @{term SKIP_process}   (* aucun local → pas de réseau *)
+    else
+      let
+        val mset  = Cspm_API.mk_mset
+                      (HOLogic.mk_list @{typ string} names)
+        val lam   = Abs ("idx", @{typ string},
+                         Const (@{const_name LOCALVARS}, @{typ string} --> procT)
+                           $ Bound 0)
+      in
+        Cspm_API.mk_MultiInter_ sumT mset lam
+      end
+  end
+
+(* D.  compose  Sem ti_cmd  ||  LOCALVARSᵢ  ---------------------------- *)
+val par_const =
+  Const (@{const_name par},
+         procT --> @{typ "('ev) set"} --> procT --> procT)
+
+val thread_processes : term list =
+  ListPair.map (fn (th_absy, cmd_term) =>
+      let
+        val sem_proc = sem_const $ cmd_term
+        val lvars_net = localvars_net th_absy
+      in
+        par_const $ sem_proc $ @{term UNIV} $ lvars_net
+      end)
+    (#threads_decls checked, thread_consts)
+
+(* E.  réseau des threads (+ locals) combiné avec  ||| ----------------- *)
+val thread_net_term : term =
+  (case thread_processes of
+      []   => error "No threads declared"
+    | [t]  => t
+    | ts   => foldr1 (fn (t1, t2) => Cspm_API.mk_Inter t1 t2) ts)
 
           val _ = writeln ("[SYSTEM]  réseau THREADS :\n  " ^
                            Syntax.string_of_term_global thy' thread_net_term)
-
           (* 5. Composition globale : GLOBALVARS [|UNIV|] THREADS [|UNIV|] SEMAPHORES *)
           val T = @{typ "'proc ⇒ 'ev set ⇒ 'proc ⇒ 'proc"}
           val net1 =  Const (@{const_name par}, T) 
