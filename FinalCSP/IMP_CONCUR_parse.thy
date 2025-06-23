@@ -1657,7 +1657,7 @@ val defini = (fn (((decl, spec), prems), params) =>
 (* petit utilitaire : type somme                                          *)
 fun mk_sumT (T1, T2) = Type ("Sum_Type.sum", [T1, T2])
 
-fun make_sigma_term (tab : term option Symtab.table) : term =
+(*fun make_sigma_term (tab : term option Symtab.table) : term =
   let
     val T = @{typ string} --> @{typ int}
     val default_case = Abs ("_", @{typ string}, @{term "0 :: int"})
@@ -1676,6 +1676,22 @@ fun make_sigma_term (tab : term option Symtab.table) : term =
     val cases = Symtab.fold mk_case tab default_case
   in
     cases
+  end*)
+fun make_sigma_term (tab : term option Symtab.table) : term =
+  let
+    val zero = @{term "0::int"}
+    val fvar = Free ("σ", Type ("fun", [@{typ string}, @{typ int}]))  (* ✅ OK *)
+    (* applique fun_upd : σ(x₁ := v₁)(x₂ := v₂)... *)
+    fun apply_update (name, SOME value) acc =
+          Syntax.const @{const_name fun_upd}
+            $ acc
+            $ HOLogic.mk_string name
+            $ value
+      | apply_update (_, NONE) acc = acc
+
+    val updated = Symtab.fold apply_update tab fvar
+  in
+    Abs ("x", @{typ string}, updated $ Bound 0)
   end
 (* --------------------------------------------------------------------- *)
 
@@ -2081,7 +2097,8 @@ val _ =
 *)
 
 ›
-
+term‹F(x := 1)›
+term‹fun_upd›
 
 section‹Tests›
 
@@ -2102,7 +2119,7 @@ thread m:
                         test = ‹test+3 :: int›;
                DONE
 end;
-
+                                                     
 
 SYSTEM WellTypedSys
   globals x:‹int› = ‹3 :: int› var1:‹int› 
