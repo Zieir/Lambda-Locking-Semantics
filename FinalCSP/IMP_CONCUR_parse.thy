@@ -117,8 +117,8 @@ type raw_thread_absy = (binding option * (*a thread's name*)
 
 val parse_system_spec = (
           Parse.binding 
-       --| \<^keyword>‹globals›    -- (Scan.repeat1 parse_var_decl)
-       --| \<^keyword>‹locks›      -- (Scan.repeat1 parse_locks)
+       --| \<^keyword>‹globals›    -- (Scan.repeat parse_var_decl)
+       --| \<^keyword>‹locks›      -- (Scan.repeat parse_locks)
        -- (Scan.repeat1 parse_threads)
        --| \<^keyword>‹end;›
       ) : raw_absy parser
@@ -2102,21 +2102,10 @@ term‹fun_upd›
 section‹Tests›
 
 SYSTEM S
-  globals v :nat= ‹4::nat› x :int = ‹5 ::int› val_test : nat = ‹5::nat›
-  locks   l: nat
-thread m:
-       any test :int = ‹-3 ::int›  var_local :int = ‹4 :: int›   
-       actions SKIP;
-      var_local = ‹(4+42) :: int›;
-      test = ‹2* var_local :: int›;
-      test = ‹test+3 :: int›;
-      IF ‹x > (6 :: int)› THEN 
-                  WHILE ‹x > (2 :: int)› DO 
-                    test = ‹test-3 :: int›;
-                  DONE 
-               ELSE
-                        test = ‹test+3 :: int›;
-               DONE
+  globals 
+  locks  
+thread empty:
+       actions 
 end;
                                                      
 
