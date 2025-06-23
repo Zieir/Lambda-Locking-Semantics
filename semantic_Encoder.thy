@@ -1,5 +1,5 @@
 (*<*)theory IMP_CONCUR_parse
-  imports Main  (*"HOL-CSPM.CSPM"*) "IMP_CONCUR_sem" (*Isabelle_DOF.technical_report IMP_CONCUR_MULTI_CSPM*)
+  imports Main  (*"HOL-CSPM.CSPM"*) "IMP_CONCUR_sem" (*"../Isabelle2025/src/HOL/Set"*) (*Isabelle_DOF.technical_report IMP_CONCUR_MULTI_CSPM*)
   keywords  "SYSTEM" :: thy_decl
       and   "globals" "locks" "LOCK" "UNLOCK" "thread" "WHILE" "IF" "ELSE" "THEN"
            "end;" "any" "actions" "DO" "<-" "->" "SKIP" "DONE"
@@ -1653,8 +1653,24 @@ fun generate_globals_term (globals : (binding * typ * Position.T * term option) 
   end
 ›*)
 (**********************************************************)
+(* 1.a – on retire sa notation si elle traîne encore *)
+no_notation Synchronization_Product.Par_syntax ("(_ || _)" [74,75] 74)
 
+(* 1.b – on cache carrément la constante *)
+hide_const (open) Synchronization_Product.Par_syntax
+(* 1. Si Sync est déjà importé, on retire sa notation : *)
+no_notation Synchronization_Product.Sync ("_ ⟦ _ ⟧ _" [60,60,60] 60)
 
+(* 2. Ta constante parallèle *)
+consts par :: "'proc ⇒ 'ev set ⇒ 'proc ⇒ 'proc"
+
+(* 3. On lui redonne l’infix ⟦ _ ⟧ _ *)
+notation par  ("_ ⟦ _ ⟧ _" [60,60,60] 60)
+
+(* 4. L’abréviation voulue, sans ambiguïté *)
+abbreviation Par_syntax  ("(_ || _)" [74,75] 74)
+  where "P || Q ≡ par P UNIV Q"
+  (*   └─────── on nomme explicitement la constante, plus de conflit *)
 section‹Impression›
 ML‹
 val defini = (fn (((decl, spec), prems), params) =>
@@ -1746,6 +1762,125 @@ val globals_net_term =
         in
           thy'
         end)))*)
+(*Check this
+val _ =
+  Outer_Syntax.command \<^command_keyword>‹SYSTEM›
+    "defines System Specification"
+    (parse_system_spec >>
+     (fn system_data => Toplevel.theory (fn thy =>
+      let
+        (* 1 • Checks ------------------------------------------------------- *)
+        val checked  = context_check system_data thy
+        val thy_sem  = semantic_check checked thy
+
+        (* 2 • Création des constantes <t_cmd> ----------------------------- *)
+        val lthy0 = Named_Target.theory_init thy_sem
+
+        fun define_cmd ({nom_thread, actions, ...}: thread_absy) lthy =
+          let
+            val name      = Binding.name_of nom_thread
+            val const_bnd = Binding.name (name ^ "_cmd")
+            val com_term  = quote_com (sequence_actions actions)
+            val _         = if fastype_of com_term = @{typ com}
+                            then () else error ("Thread "^name^": bad type")
+            val ((_, _), lthy') =
+                  Local_Theory.define ((const_bnd, NoSyn),
+                                       ((Binding.empty, []), com_term)) lthy
+            val _ = writeln ("✓ defined «" ^ name ^ "_cmd»")
+          in lthy' end
+
+        val lthy_final = fold define_cmd (#threads_decls checked) lthy0
+        val thy'       = Local_Theory.exit_global lthy_final
+        (* ---- À partir d’ici, on est de retour en théorie globale ------- *)
+
+        val sumT  = Type ("Sum_Type.sum", [@{typ sema_evs}, @{typ glo_vars_ev}])
+        val procT = Cspm_API.mk_processT sumT
+        val mk_SKIP = Cspm_API.mk_STOP sumT   (* juste pour typer les affichages *)
+
+        (* ---------- réseau GLOBALVARS ----------------------------------- *)
+        val globals_names =
+          map (fn (b,_,_,_) => HOLogic.mk_string (Binding.name_of b))
+              (#globals_decls checked)
+
+        val globals_net_term =
+          let
+            val mset   = Cspm_API.mk_mset (HOLogic.mk_list @{typ string} globals_names)
+            val lam    = Abs ("idx", @{typ string},
+                              Const (@{const_name GLOBALVARS},
+                                     @{typ string} --> procT) $ Bound 0)
+          in  Cspm_API.mk_MultiInter_ sumT mset lam  end
+
+        val _ = writeln ("[SYSTEM] GLOBALVARS :\n  " ^
+                         Syntax.string_of_term_global thy' globals_net_term)
+
+        (* ---------- réseau SEMAPHORES ----------------------------------- *)
+        val lock_terms =
+          map (fn (b,_,_) =>
+                 HOLogic.mk_number @{typ int}
+                                    (get_lock_id (Binding.name_of b)))
+              (#locks_decls checked)
+
+        val semaphores_net_term =
+          let
+            val mset = Cspm_API.mk_mset
+                         (HOLogic.mk_list @{typ int} lock_terms)
+            val lam  = Abs ("idx", @{typ int},
+                            Const (@{const_name SEMAPHORES},
+                                   @{typ int} --> procT) $ Bound 0)
+          in  Cspm_API.mk_MultiInter_ sumT mset lam end
+
+        val _ = writeln ("[SYSTEM] SEMAPHORES :\n  " ^
+                         Syntax.string_of_term_global thy' semaphores_net_term)
+
+        (* ---------- réseau THREADS -------------------------------------- *)
+        val thread_names =
+          map (fn {nom_thread, ...} => Binding.name_of nom_thread)
+              (#threads_decls checked)
+
+        val thread_cmd_terms =
+          map (fn n => Syntax.read_term_global thy' (n ^ "_cmd"))
+              thread_names
+
+        val sem_fun = Const (@{const_name Sem}, @{typ com} --> procT)
+
+        val thread_proc_terms =
+          map (fn t => sem_fun $ t) thread_cmd_terms
+
+        val thread_net_term =
+          (case thread_proc_terms of
+              []   => error "No thread declared"
+            | [t]  => t
+            | t::ts => fold (Cspm_API.mk_Inter) ts t)
+
+        val _ = writeln ("[SYSTEM] THREADS :\n  " ^
+                         Syntax.string_of_term_global thy' thread_net_term)
+
+        (* ---------- composition globale --------------------------------- *)
+        val net_globals_threads =
+              Cspm_API.mk_Sync globals_net_term
+                               (HOLogic.mk_UNIV sumT)   (*   [| UNIV |]   *)
+                               thread_net_term
+
+        val full_system_term =
+              Cspm_API.mk_Sync net_globals_threads
+                               (HOLogic.mk_UNIV sumT)
+                               semaphores_net_term
+
+        val _ = writeln ("[SYSTEM] FULL NET :\n  " ^
+                         Syntax.string_of_term_global thy' full_system_term)
+
+        (* (optionnel) : déclarer une constante SYSTEM_NET ----------------- *)
+        val lthy_sys = Named_Target.theory_init thy'
+        val ((_, _), lthy_sys') =
+              Local_Theory.define ((Binding.name "SYSTEM_NET", NoSyn),
+                                   ((Binding.empty, []), full_system_term)) lthy_sys
+        val thy'' = Local_Theory.exit_global lthy_sys'
+
+      in
+        thy''
+      end)))
+
+ *)
 
 val _ =
   Outer_Syntax.command \<^command_keyword>‹SYSTEM›
@@ -1833,6 +1968,39 @@ val _ =
           
           val _ = writeln ("[SYSTEM]  réseau SEMAPHORES :\n  " ^
                            Syntax.string_of_term_global thy' semaphores_net_term)
+          (* 4. Construction du réseau des THREADS --------------------------- *)
+          val thread_names : string list =
+            map (fn {nom_thread, ...} => Binding.name_of nom_thread) (#threads_decls checked)
+
+val thread_consts : term list =
+  map (fn name =>
+    Const (Sign.full_name thy (Binding.name (name ^ "_cmd")), @{typ com}))
+  thread_names
+
+          val sem_const = Const (@{const_name Sem}, @{typ com} --> procT)
+
+          val thread_processes : term list =
+            map (fn t => sem_const $ t) thread_consts
+
+          val thread_net_term =
+            (case thread_processes of
+                [] => error "No threads declared"
+              | [t] => t
+              | ts => foldr1 (fn (t1, t2) => Cspm_API.mk_Inter t1 t2) ts)
+
+          val _ = writeln ("[SYSTEM]  réseau THREADS :\n  " ^
+                           Syntax.string_of_term_global thy' thread_net_term)
+
+          (* 5. Composition globale : GLOBALVARS [|UNIV|] THREADS [|UNIV|] SEMAPHORES *)
+          val T = @{typ "'proc ⇒ 'ev set ⇒ 'proc ⇒ 'proc"}
+          val net1 =  Const (@{const_name par}, T) 
+                        $ globals_net_term $ @{term UNIV} $ thread_net_term     
+          val full_system_term = Const (@{const_name par}, T)
+                                  $ net1 $ @{term UNIV} $ semaphores_net_term    
+
+          val _ = writeln ("[SYSTEM]  réseau complet :\n  " ^
+                           Syntax.string_of_term_global thy' full_system_term)
+
         in
           thy'
         end)))
@@ -2027,7 +2195,19 @@ thread t2 :
             SKIP;
          DONE
         y = ‹var2 + 3 :: int›; 
-
+thread t3:
+       any test :int = ‹-3 ::int›  var_local :int = ‹4 :: int›   
+       actions SKIP;
+      var_local = ‹(4+42) :: int›;
+      test = ‹2* var_local :: int›;
+      test = ‹test+3 :: int›;
+      IF ‹x > (6 :: int)› THEN 
+                  WHILE ‹x > (2 :: int)› DO 
+                    test = ‹test-3 :: int›;
+                  DONE 
+               ELSE
+                        test = ‹test+3 :: int›;
+               DONE
 end;
 ML‹
 val temp = \<^term>‹Sem(t1_cmd)›
