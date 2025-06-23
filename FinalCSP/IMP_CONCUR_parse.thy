@@ -1656,6 +1656,27 @@ val defini = (fn (((decl, spec), prems), params) =>
 (* --------------------------------------------------------------------- *)
 (* petit utilitaire : type somme                                          *)
 fun mk_sumT (T1, T2) = Type ("Sum_Type.sum", [T1, T2])
+
+fun make_sigma_term (tab : term option Symtab.table) : term =
+  let
+    val T = @{typ string} --> @{typ int}
+    val default_case = Abs ("_", @{typ string}, @{term "0 :: int"})
+
+    (* Transforme les entrées SOME v -> v *)
+    fun mk_case (name, SOME value) acc =
+          let
+            val str_pat = Syntax.const @{const_name HOL.equal}
+                          $ Bound 0 $ HOLogic.mk_string name
+            val cond = Syntax.const @{const_name If} $ str_pat $ value $ acc
+          in
+            Abs ("x", @{typ string}, cond)
+          end
+      | mk_case (_, NONE) acc = acc  (* on ignore les variables non initialisées *)
+
+    val cases = Symtab.fold mk_case tab default_case
+  in
+    cases
+  end
 (* --------------------------------------------------------------------- *)
 
 (*Check this
@@ -1823,20 +1844,25 @@ val _ =
           
           val sumT = Type ("Sum_Type.sum", [@{typ sema_evs}, @{typ glo_vars_ev}])
           val procT = Cspm_API.mk_processT sumT
-          
-          val GLOBALVARS_const =
+          val sigma0_term = make_sigma_term (#varstab checked)    
+
+      
+          (*val GLOBALVARS_const =
             Const (@{const_name GLOBALVARS}, @{typ string} --> procT)
           
           val lam_GLOBALVARS =
-            Abs ("idx", @{typ string}, GLOBALVARS_const $ Bound 0)
-          
+            Abs ("idx", @{typ string}, GLOBALVARS_const $ Bound 0)*)
+
+          val GLOBALVARS_partial = Const (@{const_name GLOBALVARS}, @{typ string} --> @{typ σ} --> procT)
+          val lam_GLOBALVARS = Abs ("idx", @{typ string}, GLOBALVARS_partial $ Bound 0 $ sigma0_term)
+
           val globals_net_term =
             Cspm_API.mk_MultiInter_ sumT globals_mset_term lam_GLOBALVARS
           
           val _ = writeln ("[SYSTEM]  réseau GLOBALVARS :\n  " ^
                            Syntax.string_of_term_global thy' globals_net_term)
         
-        (* 2.b Fonction pour générer un réseau LOCALVARS pour un thread *)
+        (*(* 2.b Fonction pour générer un réseau LOCALVARS pour un thread *)
         fun make_localvar_net thy ({nom_thread, locals_decl, ...} : thread_absy) : term =
           let
             val thread_name = Binding.name_of nom_thread
@@ -1851,7 +1877,7 @@ val _ =
             val net = Cspm_API.mk_MultiInter_ sumT mset_term lam
           in
             net
-          end
+          end*)
           (* ---------------------------------------------------------------- *)
           (* 3.  Construction du réseau SEMAPHORES -------------------------------- *)
           
@@ -1912,25 +1938,29 @@ val _ =
                 thread_names
           
           (* C.  fabrique le réseau LOCALVARS pour un thread donné --------------- *)
-          fun localvars_net ({locals_decl, ...} : thread_absy) : term =
-            let
-              val names =
-                map (fn ((bdg,_),_) => HOLogic.mk_string (Binding.name_of bdg))
-                    locals_decl
-            in
-              if null names
-              then @{term SKIP_process}   (* aucun local → pas de réseau *)
-              else
-                let
-                  val mset  = Cspm_API.mk_mset
-                                (HOLogic.mk_list @{typ string} names)
-                  val lam   = Abs ("idx", @{typ string},
-                                   Const (@{const_name LOCALVARS}, @{typ string} --> procT)
-                                     $ Bound 0)
-                in
-                  Cspm_API.mk_MultiInter_ sumT mset lam
-                end
-            end
+         fun localvars_net ({locals_decl, locstab, ...} : thread_absy) : term =
+            if null locals_decl
+            then @{term SKIP_process}
+            else
+              let
+                val names =
+                  map (fn ((bdg,_),_) => HOLogic.mk_string (Binding.name_of bdg)) locals_decl
+                val mset = Cspm_API.mk_mset (HOLogic.mk_list @{typ string} names)
+          
+                (* --- nouveau σ pour CE thread --- *)
+                val sigma_thread_term = make_sigma_term locstab
+          
+                val LOCALVARS_partial =
+                      Const (@{const_name LOCALVARS},
+                             @{typ string} --> @{typ σ} --> procT)
+          
+                val lam =
+                      Abs ("idx", @{typ string},
+                           LOCALVARS_partial $ Bound 0 $ sigma_thread_term)
+              in
+                Cspm_API.mk_MultiInter_ sumT mset lam
+              end
+            
           
           (* D.  compose  Sem ti_cmd  ||  LOCALVARSᵢ  ---------------------------- *)
           val par_const =
