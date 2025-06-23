@@ -127,32 +127,31 @@ subsection‹A simplistic model of a thread-global variable family›
 (* (this should be a locale) *)
 
 
-datatype   glo_vars_ev = read ‹SV› ‹D› | update ‹SV› ‹D›
+datatype   vars_ev = read_glo ‹SV› ‹D› | update_glo ‹SV› ‹D› | read_loc ‹SV› ‹D› | update_loc ‹SV› ‹D›
 
-definition global_vars :: "SV ⇒ σ ⇒ glo_vars_ev process" 
-  where   ‹global_vars ≡ μ X.   (λ id. (λ σ.  ((read id)❙!(σ id) → X id σ) 
-                                            □ ((update id)❙?v → X id (σ(id := v)))))›
+definition global_vars :: "SV ⇒ σ ⇒ vars_ev process" 
+  where   ‹global_vars ≡ μ X.   (λ id. (λ σ.  ((read_glo id)❙!(σ id) → X id σ) 
+                                            □ ((update_glo id)❙?v → X id (σ(id := v)))))›
 
 
-lemma global_vars_rec : "global_vars n σ =    ((read n)❙!(σ n) → global_vars n σ) 
-                                           □ ((update n)❙?v → global_vars n (σ(n := v)))" 
+lemma global_vars_rec : "global_vars n σ =    ((read_glo n)❙!(σ n) → global_vars n σ) 
+                                           □ ((update_glo n)❙?v → global_vars n (σ(n := v)))" 
   by (subst cont_process_rec[OF global_vars_def[THEN meta_eq_to_obj_eq]]) simp_all
 
 
 
 (*Modifs*)
-datatype   loc_vars_ev = read ‹SV› ‹D› | update ‹SV› ‹D›
 
-definition locals_vars :: "SV ⇒ σ ⇒ loc_vars_ev process" 
-  where   ‹locals_vars ≡ μ X.   (λ id. (λ σ.  ((read id)❙!(σ id) → X id σ) 
-                                            □ ((update id)❙?v → X id (σ(id := v)))))›
+definition locals_vars :: "SV ⇒ σ ⇒ vars_ev process" 
+  where   ‹locals_vars ≡ μ X.   (λ id. (λ σ.  ((read_loc id)❙!(σ id) → X id σ) 
+                                            □ ((update_loc id)❙?v → X id (σ(id := v)))))›
 
 
 
 
 section‹Denotational Semantics of ‹IMP⇩c⇩o⇩n⇩c⇩u⇩r››
 
-fun Sem⇩0 :: "com ⇒ (σ ⇒ (sema_evs+glo_vars_ev) process) ⇒ σ ⇒ (sema_evs+glo_vars_ev) process" 
+fun Sem⇩0 :: "com ⇒ (σ ⇒ (sema_evs+vars_ev) process) ⇒ σ ⇒ (sema_evs+vars_ev) process" 
   where "Sem⇩0 SKIP C                   = C" 
        |"Sem⇩0 (x := E) C               = (λ σ. C (σ(x := E σ)))"
        |"Sem⇩0 (P ; Q) C                = Sem⇩0 P (Sem⇩0 Q C)" 
@@ -160,8 +159,8 @@ fun Sem⇩0 :: "com ⇒ (σ ⇒ (sema_evs+glo_vars_ev) process) ⇒ σ ⇒ (sema
        |"Sem⇩0 (WHILE E DO B) C         = (μ X. (λ σ. if E σ then Sem⇩0 B X σ else C σ))"
        |"Sem⇩0 (com.lock n) C           = (λ σ. Inl(sema_evs.lock n) → C σ)"
        |"Sem⇩0 (com.unlock n) C         = (λ σ. Inl(sema_evs.unlock n) → C σ)"
-       |"Sem⇩0 (STORE E TO X⇩g⇩l⇩o) C       = (λ σ. Inr(glo_vars_ev.update X⇩g⇩l⇩o (E σ)) → C σ)"
-       |"Sem⇩0 (LOAD X⇩l⇩o⇩c FROM  X⇩g⇩l⇩o) C   = (λ σ. (λid. Inr(glo_vars_ev.read X⇩g⇩l⇩o id))❙?x → C(σ(X⇩l⇩o⇩c:=x)))"
+       |"Sem⇩0 (STORE E TO X⇩g⇩l⇩o) C       = (λ σ. Inr(vars_ev.update_glo X⇩g⇩l⇩o (E σ)) → C σ)"
+       |"Sem⇩0 (LOAD X⇩l⇩o⇩c FROM  X⇩g⇩l⇩o) C   = (λ σ. (λid. Inr(vars_ev.read_glo X⇩g⇩l⇩o id))❙?x → C(σ(X⇩l⇩o⇩c:=x)))"
 (* Fascinating: We don't need the sequential composition of CSP in this construction *)
 
 find_theorems Sem⇩0
