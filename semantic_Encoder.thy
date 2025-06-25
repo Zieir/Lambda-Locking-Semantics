@@ -117,8 +117,8 @@ type raw_thread_absy = (binding option * (*a thread's name*)
 
 val parse_system_spec = (
           Parse.binding 
-       --| \<^keyword>‹globals›    -- (Scan.repeat1 parse_var_decl)
-       --| \<^keyword>‹locks›      -- (Scan.repeat1 parse_locks)
+       --| \<^keyword>‹globals›    -- (Scan.repeat parse_var_decl)
+       --| \<^keyword>‹locks›      -- (Scan.repeat parse_locks)
        -- (Scan.repeat1 parse_threads)
        --| \<^keyword>‹end;›
       ) : raw_absy parser
@@ -432,6 +432,13 @@ datatype com =
 (* Table de mapping pour les locks *)
 val lock_table = Unsynchronized.ref (Symtab.empty : int Symtab.table)
 val lock_counter = Unsynchronized.ref 1
+(*                 
+type absy = {system          : binding,
+             globals_decls   : (binding * typ * Position.T * term option) list,
+             varstab         : (term option) Symtab.table,
+             locks_decls     : (binding * term * Position.T) list,
+             threads_decls   : thread_absy list
+            }
 
 fun get_lock_id (lock_name : string) : int =
   case Symtab.lookup (!lock_table) lock_name of
@@ -444,7 +451,25 @@ fun get_lock_id (lock_name : string) : int =
       in 
         new_id 
       end
+*)
 
+fun declared_lock (name: string) (machine: absy) : bool =
+  List.exists (fn (b, _, _) => Binding.name_of b = name) (#locks_decls machine)
+
+fun get_lock_id (lock_name: string) (machine: absy) : int =
+  if not (declared_lock lock_name machine) then
+    error ("Lock " ^ lock_name ^ " not declared")
+  else
+    case Symtab.lookup (!lock_table) lock_name of
+        SOME id => id
+      | NONE =>
+          let
+            val new_id = !lock_counter
+            val _ = lock_counter := new_id + 1
+            val _ = lock_table := Symtab.update (lock_name, new_id) (!lock_table)
+          in
+            new_id
+          end;
 (* Évaluation des termes Isabelle/HOL *)
 fun eval_term_to_int (thy : theory) (term : term) (state : state) : int =
   let
@@ -593,10 +618,10 @@ datatype csp_event =
 fun update_state state x v = fn y => if y = x then v else state y
 
 (* Semantique CPS complète *)
-fun sem_cps SKIP cont =
+fun sem_cps _ SKIP cont =
       (fn state => SkipEvent :: cont state)
 
-  | sem_cps (Assign (x, e)) cont = 
+  | sem_cps _ (Assign (x, e)) cont = 
       (fn state =>
         let
           val v = e state
@@ -604,29 +629,29 @@ fun sem_cps SKIP cont =
           AssignEvent (x, v) :: cont (update_state state x v)
         end)
 
-  | sem_cps (Seq (P, Q)) cont = 
-      sem_cps P (sem_cps Q cont)
+  | sem_cps machine (Seq (P, Q)) cont = 
+      sem_cps machine P (sem_cps machine Q cont)
 
-  | sem_cps (Cond (cond, t1, t2)) cont =
+  | sem_cps machine (Cond (cond, t1, t2)) cont =
       (fn state =>
-        if cond state then sem_cps t1 cont state
-        else sem_cps t2 cont state)
+        if cond state then sem_cps machine t1 cont state
+        else sem_cps machine t2 cont state)
 
-  | sem_cps (While (cond, body)) cont =
+  | sem_cps machine (While (cond, body)) cont =
       (let
         fun loop state =
           if cond state then
-            sem_cps body loop state
+            sem_cps  machine body loop state
           else cont state
       in loop end)
 
-  | sem_cps (Lock id) cont =
-      (fn state => LockEvent (id, get_lock_id id) :: cont state)
+  | sem_cps machine (Lock id) cont =
+      (fn state => LockEvent (id, get_lock_id id machine) :: cont state)
 
-  | sem_cps (Unlock id) cont =
-      (fn state => UnlockEvent (id, get_lock_id id) :: cont state)
+  | sem_cps machine (Unlock id) cont =
+      (fn state => UnlockEvent (id, get_lock_id id machine) :: cont state)
 
-  | sem_cps (Store (e, x)) cont =
+  | sem_cps _ (Store (e, x)) cont =
     (fn state =>
       let
         val v = e state
@@ -634,7 +659,7 @@ fun sem_cps SKIP cont =
       in
         UpdateEvent (x, v) :: cont new_state
       end)
-  | sem_cps (Load (x, y)) cont =
+  | sem_cps _ (Load (x, y)) cont =
     (fn state =>
       let         
         val v = safe_lookup y state
@@ -645,7 +670,7 @@ fun sem_cps SKIP cont =
 type csp_trace = csp_event list
 
 (* Fonction Sem adaptée avec gestion des événements CSP *)
-fun sem_step (thy : theory) (cmd : com) (cont : state * csp_trace -> state * csp_trace) 
+fun sem_step (thy : theory) (machine: absy) (cmd : com) (cont : state * csp_trace -> state * csp_trace) 
              (s : state, trace : csp_trace) : state * csp_trace =
   case cmd of
     SKIP => cont (s, trace)
@@ -657,26 +682,26 @@ fun sem_step (thy : theory) (cmd : com) (cont : state * csp_trace -> state * csp
         cont (new_state, trace) 
       end
   | Seq (p, q) => 
-      sem_step thy p (fn (s', trace') => sem_step thy q cont (s', trace')) (s, trace)
+      sem_step thy machine p (fn (s', trace') => sem_step thy machine  q cont (s', trace')) (s, trace)
   | Cond (guard, c1, c2) =>
       if guard s 
-      then sem_step thy c1 cont (s, trace)
-      else sem_step thy c2 cont (s, trace)
+      then sem_step thy  machine  c1 cont (s, trace)
+      else sem_step thy  machine c2 cont (s, trace)
   | While (guard, body) =>
       if guard s 
-      then sem_step thy body (fn (s', trace') => 
-             sem_step thy (While (guard, body)) cont (s', trace')) (s, trace)
+      then sem_step thy  machine body (fn (s', trace') => 
+             sem_step thy  machine (While (guard, body)) cont (s', trace')) (s, trace)
       else cont (s, trace)
   | Lock lock_name => 
       let
-        val lock_id = get_lock_id lock_name
+        val lock_id = get_lock_id lock_name machine
         val new_trace = LockEvent (lock_name, lock_id) :: trace
       in
         cont (s, new_trace)
       end
   | Unlock lock_name =>
       let
-        val lock_id = get_lock_id lock_name
+        val lock_id = get_lock_id lock_name machine
         val new_trace = UnlockEvent (lock_name, lock_id) :: trace
       in
         cont (s, new_trace)
@@ -1004,8 +1029,9 @@ fun semantic_check (absy_data : absy) (thy : theory) : theory =
                map (message false) race_warnings; ())
     
     (* Vérification 3: Vérification des types pour chaque thread *)
-    fun check_thread globals_decls (thread : thread_absy) : unit =
+    fun check_thread (machine :absy) (thread : thread_absy) : unit =
       let
+        val{system, globals_decls, varstab, locks_decls, threads_decls} = machine
         val {nom_thread, locals_decl, actions, locstab} = thread
         val thread_name = Binding.name_of nom_thread
         
@@ -1016,7 +1042,7 @@ fun semantic_check (absy_data : absy) (thy : theory) : theory =
 
         val initial_state = build_initial_state_for_thread globals_decls locals_decl thy
 
-        val cps_trace = sem_cps com_program (fn _ => []) initial_state
+        val cps_trace = sem_cps machine com_program (fn _ => []) initial_state
 
         val _ = message false (" ✓ CPS-style trace for " ^ thread_name ^ ":")
         val _ = List.app (fn ev => message false ("    " ^ @{make_string} ev)) cps_trace
@@ -1035,7 +1061,7 @@ fun semantic_check (absy_data : absy) (thy : theory) : theory =
         (* Simulation d'exécution pour détecter d'autres problèmes *)
         val initial_state = build_initial_state_for_thread globals_decls locals_decl thy
         val (final_state, execution_trace) = 
-          sem_step thy com_program (fn (s, t) => (s, t)) (initial_state, [])
+          sem_step thy machine  com_program (fn (s, t) => (s, t)) (initial_state, [])
         
         val _ = message false ("  ✓ Execution simulation completed for " ^ thread_name)
         val _ = message false (" Generated " ^ 
@@ -1044,7 +1070,7 @@ fun semantic_check (absy_data : absy) (thy : theory) : theory =
         ()
       end
     
-    val _ = map (check_thread globals_decls) (threads_decls)
+    val _ = map (check_thread absy_data) (threads_decls)
     
     (* Vérification 4: Cohérence globale du système *)
     val _ = message false "=== GLOBAL SYSTEM CONSISTENCY ==="
@@ -1276,7 +1302,7 @@ and action_to_csp action state thy =
 section‹Semantic Encoding›
 (**************************En travaux***********************)
 
-definition SKIP_process :: "(sema_evs + glo_vars_ev) process"
+definition SKIP_process :: "(sema_evs + vars_ev) process"
   where "SKIP_process ≡ Skip"
 
 ML‹
@@ -1362,7 +1388,7 @@ fun make_lambda_sigma (env_type : typ) (sigma_name : string) (t : term) : term =
     Abs (sigma_name, env_type, subst t)
   end
 (* Conversion d'une action abstraite (a_term) vers le terme logique com *)
-fun quote_com SkipA =
+fun quote_com machine SkipA =
       @{term "SKIP :: com"}  
   (*| quote_com (AssignA (b, e)) =
     let
@@ -1380,7 +1406,7 @@ fun quote_com SkipA =
           val var_str = HOLogic.mk_string (Binding.name_of b)
           val e'      = subst_with_sigma e               (* σ ''x'' … *)
           val lam     = Abs ("σ", @{typ "string ⇒ int"}, e')*)
-| quote_com (AssignA (b, e)) =
+| quote_com machine (AssignA (b, e)) =
     let
       val var_str = HOLogic.mk_string (Binding.name_of b)
       val expr = subst_with_sigma e  (* ou autre expression contenant σ ''x'' *)
@@ -1389,26 +1415,26 @@ fun quote_com SkipA =
       @{term assign} $ var_str $ lam
     end
        
-  | quote_com (SeqA (c1, c2)) =
-      @{term seq} $ quote_com c1 $ quote_com c2
-  | quote_com (LockA b) =
+  | quote_com machine (SeqA (c1, c2)) =
+      @{term seq} $ quote_com machine c1 $ quote_com machine c2
+  | quote_com machine (LockA b) =
       let 
         val n_str = Binding.name_of b
-        val n = HOLogic.mk_number @{typ int} (get_lock_id n_str)
+        val n = HOLogic.mk_number @{typ int} (get_lock_id n_str machine)
         (*val n = case Int.fromString n_str of
                   SOME i => HOLogic.mk_number @{typ nat} i
                 | NONE => error ("Invalid lock number: " ^ n_str)*)
       in 
         @{term "com.lock :: int ⇒ com"} $ n 
       end
-  | quote_com (UnlockA b) =
+  | quote_com machine (UnlockA b) =
       let 
         val n_str = Binding.name_of b
-       val n = HOLogic.mk_number @{typ int} (get_lock_id n_str)
+       val n = HOLogic.mk_number @{typ int} (get_lock_id n_str machine)
       in 
         @{term "com.unlock :: int ⇒ com"} $ n 
       end
-  | quote_com (SendA (sv, e)) =
+  | quote_com machine (SendA (sv, e)) =
       let
         val sv_str = HOLogic.mk_string (Binding.name_of sv)
         val expr = subst_with_sigma e 
@@ -1417,14 +1443,14 @@ fun quote_com SkipA =
         @{term "send :: (σ ⇒ int) ⇒ string ⇒ com"} $ lam $ sv_str
        end
 
-  | quote_com (ReceiveA (v, sv)) =
+  | quote_com machine (ReceiveA (v, sv)) =
       let
         val v_str = HOLogic.mk_string (Binding.name_of v)
         val sv_str = HOLogic.mk_string (Binding.name_of sv)
       in
         @{term "rec :: string ⇒ string ⇒ com"} $ v_str $ sv_str
       end
-  | quote_com (IfelseA ((cond, then_branch), else_branch)) =
+  | quote_com machine (IfelseA ((cond, then_branch), else_branch)) =
     let
      (* val (sigma, e') = subst_with_fresh_env @{typ "string ⇒ int"} cond
          
@@ -1434,24 +1460,24 @@ fun quote_com SkipA =
       val lam = make_lambda_sigma @{typ "string ⇒ int"} "σ" expr
     in
       @{term cond} $ lam 
-                   $ quote_com (sequence_actions then_branch)
-                   $ quote_com (sequence_actions else_branch)
+                   $ quote_com machine (sequence_actions then_branch)
+                   $ quote_com machine (sequence_actions else_branch)
     end
       
-  | quote_com (WhileA (cond, body)) =
+  | quote_com machine (WhileA (cond, body)) =
          let
       val expr = subst_with_sigma cond 
       val lam = make_lambda_sigma @{typ "string ⇒ int"} "σ" expr
            
           in
             @{term while} $ lam 
-                         $ quote_com (sequence_actions body)
+                         $ quote_com machine (sequence_actions body)
           end
 ›
 
 ML‹
 (* Fonction pour déclarer les termes des threads *)
-fun declare_thread_terms (thy: theory) (threads: thread_absy list)
+fun declare_thread_terms (thy: theory) (machine : absy) (threads: thread_absy list)
                          (varstab: (term option) Symtab.table)
                          : theory =
   fold (fn {nom_thread, actions, locstab, ...} => fn thy' =>
@@ -1461,7 +1487,7 @@ fun declare_thread_terms (thy: theory) (threads: thread_absy list)
 
       (* Convert actions into com *)
       val com_ast = sequence_actions actions
-      val com_term = quote_com com_ast
+      val com_term = quote_com machine com_ast
       val com_term = Type.constraint @{typ com} com_term
   
       (* Create a simple definition: thread_name_term = com_term *)
@@ -1564,7 +1590,7 @@ fun generate_terms (absy_data : absy) (thy : theory) : theory =
       | LockA name =>
           let
             val n_str = Binding.name_of name
-            val n = HOLogic.mk_number @{typ int} (get_lock_id n_str)
+            val n = HOLogic.mk_number @{typ int} (get_lock_id n_str absy_data)
             val lock_term = @{term lock} $ n
           in
             (lock_term, state)
@@ -1573,7 +1599,7 @@ fun generate_terms (absy_data : absy) (thy : theory) : theory =
       | UnlockA name =>
           let
             val n_str = Binding.name_of name
-            val n = HOLogic.mk_number @{typ int} (get_lock_id n_str)
+            val n = HOLogic.mk_number @{typ int} (get_lock_id n_str absy_data)
             (*val n = case Int.fromString n_str of
                       SOME i => HOLogic.mk_number @{typ nat} i
                     | NONE => error ("Invalid unlock number: " ^ n_str)*)
@@ -1604,7 +1630,7 @@ fun generate_terms (absy_data : absy) (thy : theory) : theory =
     ) threads_decls
 
     (* Déclarer les termes des threads dans la théorie *)
-    val thy' = declare_thread_terms thy threads_decls varstab
+    val thy' = declare_thread_terms thy absy_data threads_decls varstab
   in
     thy'
   end
@@ -1656,6 +1682,42 @@ val defini = (fn (((decl, spec), prems), params) =>
 (* --------------------------------------------------------------------- *)
 (* petit utilitaire : type somme                                          *)
 fun mk_sumT (T1, T2) = Type ("Sum_Type.sum", [T1, T2])
+
+(*fun make_sigma_term (tab : term option Symtab.table) : term =
+  let
+    val T = @{typ string} --> @{typ int}
+    val default_case = Abs ("_", @{typ string}, @{term "0 :: int"})
+
+    (* Transforme les entrées SOME v -> v *)
+    fun mk_case (name, SOME value) acc =
+          let
+            val str_pat = Syntax.const @{const_name HOL.equal}
+                          $ Bound 0 $ HOLogic.mk_string name
+            val cond = Syntax.const @{const_name If} $ str_pat $ value $ acc
+          in
+            Abs ("x", @{typ string}, cond)
+          end
+      | mk_case (_, NONE) acc = acc  (* on ignore les variables non initialisées *)
+
+    val cases = Symtab.fold mk_case tab default_case
+  in
+    cases
+  end*)
+fun make_sigma_term (tab : term option Symtab.table) : term =
+  let
+    val fvar = Free ("σ", Type ("fun", [@{typ string}, @{typ int}])) 
+    (* applique fun_upd : σ(x₁ := v₁)(x₂ := v₂)... *)
+    fun apply_update (name, SOME value) acc =
+          Syntax.const @{const_name fun_upd}
+            $ acc
+            $ HOLogic.mk_string name
+            $ value
+      | apply_update (_, NONE) acc = acc
+
+    val updated = Symtab.fold apply_update tab fvar
+  in
+    Abs ("x", @{typ string}, updated $ Bound 0)
+  end
 (* --------------------------------------------------------------------- *)
 
 (*Check this
@@ -1794,7 +1856,7 @@ val _ =
             let
               val name      = Binding.name_of nom_thread
               val const_bnd = Binding.name (name ^ "_cmd")
-              val com_term  = quote_com (sequence_actions actions)
+              val com_term  = quote_com checked (sequence_actions actions)
               val ((_, _), lthy') =
                     Local_Theory.define ((const_bnd, NoSyn),
                                          ((Binding.empty, []), com_term)) lthy
@@ -1821,22 +1883,27 @@ val _ =
           val globals_mset_term =
             Cspm_API.mk_mset globals_list_term
           
-          val sumT = Type ("Sum_Type.sum", [@{typ sema_evs}, @{typ glo_vars_ev}])
+          val sumT = Type ("Sum_Type.sum", [@{typ sema_evs}, @{typ vars_ev}])
           val procT = Cspm_API.mk_processT sumT
-          
-          val GLOBALVARS_const =
+          val sigma0_term = make_sigma_term (#varstab checked)    
+
+      
+          (*val GLOBALVARS_const =
             Const (@{const_name GLOBALVARS}, @{typ string} --> procT)
           
           val lam_GLOBALVARS =
-            Abs ("idx", @{typ string}, GLOBALVARS_const $ Bound 0)
-          
+            Abs ("idx", @{typ string}, GLOBALVARS_const $ Bound 0)*)
+
+          val GLOBALVARS_partial = Const (@{const_name GLOBALVARS}, @{typ string} --> @{typ σ} --> procT)
+          val lam_GLOBALVARS = Abs ("idx", @{typ string}, GLOBALVARS_partial $ Bound 0 $ sigma0_term)
+
           val globals_net_term =
             Cspm_API.mk_MultiInter_ sumT globals_mset_term lam_GLOBALVARS
           
           val _ = writeln ("[SYSTEM]  réseau GLOBALVARS :\n  " ^
                            Syntax.string_of_term_global thy' globals_net_term)
         
-        (* 2.b Fonction pour générer un réseau LOCALVARS pour un thread *)
+        (*(* 2.b Fonction pour générer un réseau LOCALVARS pour un thread *)
         fun make_localvar_net thy ({nom_thread, locals_decl, ...} : thread_absy) : term =
           let
             val thread_name = Binding.name_of nom_thread
@@ -1851,7 +1918,7 @@ val _ =
             val net = Cspm_API.mk_MultiInter_ sumT mset_term lam
           in
             net
-          end
+          end*)
           (* ---------------------------------------------------------------- *)
           (* 3.  Construction du réseau SEMAPHORES -------------------------------- *)
           
@@ -1859,7 +1926,7 @@ val _ =
 
           val lock_ids_terms : term list =
             map (fn (b, _, _) =>
-                   HOLogic.mk_number @{typ int} (get_lock_id (Binding.name_of b)))  (* get_lock_id : binding -> int *)
+                   HOLogic.mk_number @{typ int} (get_lock_id (Binding.name_of b) checked))  (* get_lock_id : binding -> int *)
                 (#locks_decls checked)
           
           val locks_list_term =
@@ -1905,32 +1972,36 @@ val _ =
             map (fn {nom_thread, ...} => Binding.name_of nom_thread)
                 (#threads_decls checked)
           
-          (* B.  constantes  ti_cmd  -------------------------------------------- *)
+          (* B.  constantes  (thread's name)_cmd  -------------------------------------------- *)
           val thread_consts : term list =
             map (fn n =>
                   Const (Sign.full_name thy (Binding.name (n ^ "_cmd")), @{typ com}))
                 thread_names
           
           (* C.  fabrique le réseau LOCALVARS pour un thread donné --------------- *)
-          fun localvars_net ({locals_decl, ...} : thread_absy) : term =
-            let
-              val names =
-                map (fn ((bdg,_),_) => HOLogic.mk_string (Binding.name_of bdg))
-                    locals_decl
-            in
-              if null names
-              then @{term SKIP_process}   (* aucun local → pas de réseau *)
-              else
-                let
-                  val mset  = Cspm_API.mk_mset
-                                (HOLogic.mk_list @{typ string} names)
-                  val lam   = Abs ("idx", @{typ string},
-                                   Const (@{const_name LOCALVARS}, @{typ string} --> procT)
-                                     $ Bound 0)
-                in
-                  Cspm_API.mk_MultiInter_ sumT mset lam
-                end
-            end
+         fun localvars_net ({locals_decl, locstab, ...} : thread_absy) : term =
+            if null locals_decl
+            then @{term SKIP_process}
+            else
+              let
+                val names =
+                  map (fn ((bdg,_),_) => HOLogic.mk_string (Binding.name_of bdg)) locals_decl
+                val mset = Cspm_API.mk_mset (HOLogic.mk_list @{typ string} names)
+          
+                (* --- nouveau σ pour CE thread --- *)
+                val sigma_thread_term = make_sigma_term locstab
+          
+                val LOCALVARS_partial =
+                      Const (@{const_name LOCALVARS},
+                             @{typ string} --> @{typ σ} --> procT)
+          
+                val lam =
+                      Abs ("idx", @{typ string},
+                           LOCALVARS_partial $ Bound 0 $ sigma_thread_term)
+              in
+                Cspm_API.mk_MultiInter_ sumT mset lam
+              end
+            
           
           (* D.  compose  Sem ti_cmd  ||  LOCALVARSᵢ  ---------------------------- *)
           val par_const =
@@ -2051,43 +2122,35 @@ val _ =
 *)
 
 ›
-
+term‹F(x := 1)›
+term‹fun_upd›
 
 section‹Tests›
 
 SYSTEM S
-  globals v :nat= ‹4::nat› x :int = ‹5 ::int› val_test : nat = ‹5::nat›
-  locks   l: nat
-thread m:
-       any test :int = ‹-3 ::int›  var_local :int = ‹4 :: int›   
-       actions SKIP;
-      var_local = ‹(4+42) :: int›;
-      test = ‹2* var_local :: int›;
-      test = ‹test+3 :: int›;
-      IF ‹x > (6 :: int)› THEN 
-                  WHILE ‹x > (2 :: int)› DO 
-                    test = ‹test-3 :: int›;
-                  DONE 
-               ELSE
-                        test = ‹test+3 :: int›;
-               DONE
+  globals 
+  locks  
+thread empty:
+       actions 
 end;
-
+                                                     
 
 SYSTEM WellTypedSys
   globals x:‹int› = ‹3 :: int› var1:‹int› 
   locks   l:‹()›    l2:‹()›                                   
   thread t1 : 
-         any y : ‹int› = ‹36 :: int›
+         any y : ‹int› = ‹36 :: int› var2 : ‹int›
          actions 
          SKIP;
          LOCK l;
           y <- var1;
          UNLOCK l;
-         IF ‹var1>(3:: int)› THEN 
-            WHILE ‹var1>(3:: int)› DO 
+         IF ‹var1≤(3:: int)› THEN 
+            WHILE ‹var1≤(3:: int)› DO 
               LOCK l2;
               SKIP;
+              var2 = ‹var2 + 1 ::int›;
+              var1 -> ‹var2 :: int›;
               UNLOCK l2;                                                         
             DONE 
          ELSE
