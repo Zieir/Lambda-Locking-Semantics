@@ -1897,15 +1897,17 @@ val _ =
           val GLOBALVARS_partial = Const (@{const_name GLOBALVARS}, @{typ string} --> @{typ σ} --> procT)
           val lam_GLOBALVARS = Abs ("idx", @{typ string}, GLOBALVARS_partial $ Bound 0 $ sigma0_term)
 
-          val globals_net_term =
-                    if null (#globals_decls checked) then NONE
-            else SOME(Cspm_API.mk_MultiInter_ sumT globals_mset_term lam_GLOBALVARS
- ) 
+ 
+          val processes : term list =
+            map (fn name => lam_GLOBALVARS $ name) globals_names
+          (* globals_names : term list de strings *)
           
-          val _ =           case globals_net_term of 
-             SOME t =>  writeln ("[SYSTEM]  réseau GLOBALVARS :\n  " ^
-                             Syntax.string_of_term_global thy' t)
-             |NONE => writeln ("[SYSTEM]  réseau SEMAPHORES :\n Vous n'avez pas de variables globales \n") 
+          val globals_net_term : term option =
+            (case processes of
+               [] => NONE
+             | [t] => SOME t
+             | ts => SOME (foldr1 (fn (t1, t2) => Cspm_API.mk_Inter t1 t2) ts))
+ 
 
         
         (*(* 2.b Fonction pour générer un réseau LOCALVARS pour un thread *)
@@ -1942,17 +1944,26 @@ val _ =
           
           val SEMAPHORES_const =
             Const (@{const_name SEMAPHORES}, @{typ int} --> procT)
+
+         val lam_SEMAPHORES =
+                    Abs ("idx", @{typ int}, SEMAPHORES_const $ Bound 0)
+                  val processes : term list =
+                    map (fn name => lam_SEMAPHORES $ name) lock_ids_terms
+          (* globals_names : term list de strings *)
           
-          val lam_SEMAPHORES =
-            Abs ("idx", @{typ int}, SEMAPHORES_const $ Bound 0)
+         val semaphores_net_term : term option =
+              case processes of
+                [] => NONE
+              | [t] => SOME t
+              | ts => SOME (foldr1 (fn (t1, t2) => Cspm_API.mk_Inter t1 t2) ts)
+            
+
+         
           
-          val semaphores_net_term = if null (#locks_decls checked) then NONE
-            else SOME( Cspm_API.mk_MultiInter_ sumT locks_mset_term lam_SEMAPHORES ) 
-          
-          val _ =           case semaphores_net_term of 
-             SOME t =>  writeln ("[SYSTEM]  réseau SEMAPHORES :\n  " ^
-                             Syntax.string_of_term_global thy' t)
-             |NONE => writeln ("[SYSTEM]  réseau SEMAPHORES :\n Vous n'avez pas de Locks \n") 
+          (*val semaphores_net_term = 
+             SOME( Cspm_API.mk_MultiInter_ sumT locks_mset_term lam_SEMAPHORES ) *)          
+
+             (*|NONE => writeln ("[SYSTEM]  réseau SEMAPHORES :\n Vous n'avez pas de Locks \n") *)
 
           (* 4. Construction du réseau des THREADS --------------------------- *)
          (* val thread_names : string list =
@@ -2019,14 +2030,14 @@ val _ =
             ListPair.map (fn (th_absy, cmd_term) =>
                 let
                   val sem_proc = sem_const $ cmd_term
-                  val lvars_net = localvars_net th_absy
+                  val lvars_net = localvars_net th_absy 
                 in
                   case lvars_net of 
                   NONE =>  sem_proc 
                   |SOME t => par_const $ sem_proc $ @{term UNIV} $ t
                 end)
               (#threads_decls checked, thread_consts)
-          
+             
           (* E.  réseau des threads (+ locals) combiné avec  ||| ----------------- *)
           val thread_net_term : term =
             (case thread_processes of
@@ -2038,19 +2049,28 @@ val _ =
                                      Syntax.string_of_term_global thy' thread_net_term)
                     (* 5. Composition globale : GLOBALVARS [|UNIV|] THREADS [|UNIV|] SEMAPHORES *)
                     val T = @{typ "'proc ⇒ 'ev set ⇒ 'proc ⇒ 'proc"}
-                    val net1 = case semaphores_net_term of 
-                                   SOME t =>Const (@{const_name par}, T) 
-                                  $ t $ @{term UNIV} $ thread_net_term
-                                  | NONE => thread_net_term   
-                    val full_system_term =  case semaphores_net_term of 
-                                          SOME t =>Const (@{const_name par}, T)
-                                            $ net1 $ @{term UNIV} $ t  
-                                          |NONE => net1
+                    val net1 = (case globals_net_term of 
+                                SOME t =>   Const (@{const_name par}, T) 
+                                            $t  $ @{term UNIV} $ thread_net_term
+                                |NONE =>thread_net_term)
+  
+                    val full_system_term = (case semaphores_net_term of
+                                          SOME t => par_const
+                                                    $ net1 $ @{term UNIV} $ (t) 
+                                          |NONE =>net1)
           
                     val _ = writeln ("[SYSTEM]  réseau complet :\n  " ^
                                      Syntax.string_of_term_global thy' full_system_term)
-
-                  in
+              (*  val _ = tracing ("\n [DEBUG] Type threads = " ^
+                                 Syntax.string_of_typ_global @{theory} (fastype_of (thread_net_term) ))
+val _ = tracing ("\n [DEBUG] Type lam_GLOBALVARS = " ^
+                                 Syntax.string_of_typ_global @{theory} (fastype_of (the globals_net_term) )) 
+val _ = tracing ("\n [DEBUG] Type semaphores_net_term = " ^
+                                 Syntax.string_of_typ_global @{theory} (fastype_of (the semaphores_net_term) ))     
+               val _ = tracing ("\n [DEBUG] Type full_term = " ^
+                                 Syntax.string_of_typ_global @{theory} (fastype_of (full_system_term) )) *)    
+                 (* val _ = Thm.cterm_of @{context} full_system_term*)
+in
                     thy'
                   end)))
 
@@ -2151,7 +2171,7 @@ end;
                                                      
 
 SYSTEM WellTypedSys
-  globals x:‹int› = ‹3 :: int› var1:‹int› 
+  globals x:‹int› = ‹3 :: int› var1:‹int› = ‹4::int›  var4:‹int› = ‹4::int›
   locks   l:‹()›    l2:‹()›                                   
   thread t1 : 
          any y : ‹int› = ‹36 :: int› var2 : ‹int›
