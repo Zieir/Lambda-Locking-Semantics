@@ -1720,23 +1720,26 @@ fun mk_sumT (T1, T2) = Type ("Sum_Type.sum", [T1, T2])
   end*)
 fun mk_fun_upd (f, x, y) =
   let
-    val Type (_, [T_dom, T_cod]) = fastype_of f
+    val T_dom = @{typ string}
+    val T_cod = @{typ int}
   in
     Const (@{const_name fun_upd},
-           (T_dom --> T_cod) --> T_dom --> T_cod --> T_dom --> T_cod)
+           (T_dom --> T_cod) --> T_dom --> T_cod --> (T_dom --> T_cod))
     $ f $ x $ y
   end
+
 fun make_sigma_term (tab : term option Symtab.table) : term =
   let
-    val fvar = Free ("σ", @{typ "string ⇒ int"}) 
+    val zero = HOLogic.mk_number @{typ int} 0
+    val base = Abs ("_", @{typ string}, zero)  (* λ_. 0 *)
 
     fun apply_update (name, SOME value) acc =
           mk_fun_upd (acc, HOLogic.mk_string name, value)
       | apply_update (_, NONE) acc = acc
 
-    val updated = Symtab.fold apply_update tab fvar
+    val updated = Symtab.fold apply_update tab base
   in
-    Abs ("x", @{typ string}, updated $ Bound 0)
+    updated  (* closed term of type string ⇒ int *)
   end
 (* --------------------------------------------------------------------- *)
 
@@ -2115,8 +2118,16 @@ val _ = tracing ("\n [DEBUG] Type semaphores_net_term = " ^
                                  Syntax.string_of_typ_global @{theory} (fastype_of (full_system_term) )) *)    
                      
               val _ =Thm.cterm_of (Proof_Context.init_global thy') full_system_term
+              val const_bnd = #system checked
+              val lthy_sys = Named_Target.theory_init thy'
+              
+              val ((_, _), lthy_sys') =
+                  Local_Theory.define ((const_bnd, NoSyn),
+                                       ((Binding.empty, []), full_system_term)) lthy_sys
+              
+              val thy'' = Local_Theory.exit_global lthy_sys'
             in
-              thy'
+              thy''
             end)))
 
 
@@ -2273,13 +2284,16 @@ end;
 ML‹
 val temp = \<^term>‹Sem(t1_cmd)›
 val temp2 = \<^term>‹Sem(t1_cmd)›
-val temp3 = \<^term>‹(t1_cmd)›
-
-
+val temp3 = \<^term>‹(t1_cmd)›         
+val temp4 = \<^term>‹empty2_cmd›
 
 val tem2= Cspm_API.mk_Det temp temp2
 ›
 
+ML‹
+val temp = \<^term>‹WellTypedSys›
+
+›
 
 
 
