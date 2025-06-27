@@ -1659,24 +1659,6 @@ fun define_cmd (const_name : string) (rhs : term) (thy : theory) : theory =
 abbreviation UNIV :: "(sema_evs + vars_ev) set"
   where "UNIV ≡ top"
 
-(* 1.a – on retire la notation si elle traîne encore *)
-no_notation Synchronization_Product.Par_syntax ("(_ || _)" [74,75] 74)
-
-(* 1.b – on cache carrément la constante *)
-hide_const (open) Synchronization_Product.Par_syntax
-(* 1. Si Sync est déjà importé, on retire sa notation : *)
-no_notation Synchronization_Product.Sync ("_ ⟦ _ ⟧ _" [60,60,60] 60)
-
-(* 2. Constante parallèle *)
-consts par :: "'proc ⇒ 'ev set ⇒ 'proc ⇒ 'proc"
-
-(* 3. On lui redonne l’infix ⟦ _ ⟧ _ *)
-notation par  ("_ ⟦ _ ⟧ _" [60,60,60] 60)
-
-(* 4. L’abréviation voulue, sans ambiguïté *)
-abbreviation Par_syntax  ("(_ || _)" [74,75] 74)
-  where "P || Q ≡ par P UNIV Q"
-  (*   └─────── on nomme explicitement la constante, plus de conflit *)
 section‹Impression›
 ML‹   
 fun mk_sumT (T1, T2) = Type ("Sum_Type.sum", [T1, T2])
@@ -1947,9 +1929,7 @@ val _ =
             
           
           (* D.  compose  Sem ti_cmd  ||  LOCALVARSᵢ  ---------------------------- *)
-          val par_const =
-            Const (@{const_name par},
-                   procT --> @{typ "('a) set"} --> procT --> procT)
+         
           val sem_const = Const (@{const_name Sem}, @{typ com} --> procT)
           val thread_processes : term list =
             ListPair.map (fn (th_absy, cmd_term) =>
@@ -2011,8 +1991,7 @@ val _ = tracing ("\n [DEBUG] Type semaphores_net_term = " ^
 
 
 ›
-term‹F(x := 1)›
-term‹fun_upd›
+
 
 section‹Tests›
 
@@ -2092,6 +2071,8 @@ val tem2= Cspm_API.mk_Det temp temp2
 
 ML‹
 val temp = \<^term>‹WellTypedSys›
+
+val c = Thm.cterm_of @{context} temp
 
 
 ›
