@@ -1663,41 +1663,7 @@ section‹Impression›
 ML‹   
 fun mk_sumT (T1, T2) = Type ("Sum_Type.sum", [T1, T2])
 
-(*fun make_sigma_term (tab : term option Symtab.table) : term =
-  let
-    val T = @{typ string} --> @{typ int}
-    val default_case = Abs ("_", @{typ string}, @{term "0 :: int"})
 
-    (* Transforme les entrées SOME v -> v *)
-    fun mk_case (name, SOME value) acc =
-          let
-            val str_pat = Syntax.const @{const_name HOL.equal}
-                          $ Bound 0 $ HOLogic.mk_string name
-            val cond = Syntax.const @{const_name If} $ str_pat $ value $ acc
-          in
-            Abs ("x", @{typ string}, cond)
-          end
-      | mk_case (_, NONE) acc = acc  (* on ignore les variables non initialisées *)
-
-    val cases = Symtab.fold mk_case tab default_case
-  in
-    cases
-  end*)
-(*fun make_sigma_term (tab : term option Symtab.table) : term =
-  let
-    val fvar = Free ("σ", Type ("fun", [@{typ string}, @{typ int}])) 
-    (* applique fun_upd : σ(x₁ := v₁)(x₂ := v₂)... *)
-    fun apply_update (name, SOME value) acc =
-          Syntax.const @{const_name fun_upd}
-            $ acc
-            $ HOLogic.mk_string name
-            $ value
-      | apply_update (_, NONE) acc = acc
-
-    val updated = Symtab.fold apply_update tab fvar
-  in
-    Abs ("x", @{typ string}, updated $ Bound 0)
-  end*)
 fun mk_fun_upd (f, x, y) =
   let
     val T_dom = @{typ string}
@@ -1790,26 +1756,7 @@ val _ =
                [] => NONE
              | [t] => SOME t
              | ts => SOME (foldr1 (fn (t1, t2) => Cspm_API.mk_Inter t1 t2) ts))
- 
 
-        
-        (*(* 2.b Fonction pour générer un réseau LOCALVARS pour un thread *)
-        fun make_localvar_net thy ({nom_thread, locals_decl, ...} : thread_absy) : term =
-          let
-            val thread_name = Binding.name_of nom_thread
-            val local_var_names =
-              map (fn ((bdg,_),_) => HOLogic.mk_string (Binding.name_of bdg)) locals_decl
-            val mset_term = Cspm_API.mk_mset (HOLogic.mk_list @{typ string} local_var_names)
-        
-            (* LOCALVARSᵢ : string ⇒ procT *)
-            val localvars_const = Const (@{const_name LOCALVARS}, @{typ string} --> procT)
-            val lam = Abs ("v", @{typ string}, localvars_const $ Bound 0)
-        
-            val net = Cspm_API.mk_MultiInter_ sumT mset_term lam
-          in
-            net
-          end*)
-          (* ---------------------------------------------------------------- *)
           (* 3.  Construction du réseau SEMAPHORES -------------------------------- *)
           
           (* extraire les noms de verrous depuis checked *)
@@ -2079,5 +2026,5 @@ val c = Thm.cterm_of @{context} temp
 
 
 find_consts name: "IMP_CONCUR_parse"
-
+find_theorems (500)name : "IMP_CONCUR_parse"
 (*<*)end  (*>*)
