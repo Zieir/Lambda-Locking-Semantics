@@ -585,26 +585,34 @@ fun check_lock_ownership (thread_name : string) (actions : a_term list) =
   let
     fun check [] _ = NONE
       | check (LockA b :: rest) held =
-          let val l = Binding.name_of b
-          in
+          let val l = Binding.name_of b in
             if List.exists (fn x => x = l) held then 
               SOME ("Thread " ^ thread_name ^ ": LOCK " ^ l ^ " already held")
             else
               check rest (l :: held)
           end
       | check (UnlockA b :: rest) held =
-          let val l = Binding.name_of b
-          in
+          let val l = Binding.name_of b in
             if List.exists (fn x => x = l) held then
               check rest (remove (op =) l held)
             else
               SOME ("Thread " ^ thread_name ^ ": tries to UNLOCK " ^ l ^ " without holding it")
           end
+      | check (IfelseA ((_, ifBody), elseBody) :: rest) held =
+          (case check ifBody held of
+              SOME err => SOME err
+            | NONE =>
+              (case check elseBody held of
+                  SOME err => SOME err
+                | NONE => check rest held))
+      | check (WhileA (_, body) :: rest) held = 
+          (case check body held of
+              SOME err => SOME err
+            | NONE => check rest held)
       | check (_ :: rest) held = check rest held
   in
     check actions []
   end
-
 
 (* Alternative CPS-style semantics *)
 datatype csp_event = 
