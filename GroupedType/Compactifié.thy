@@ -1828,25 +1828,28 @@ val _ = tracing ("\n [DEBUG] Type full_term = " ^
           map (fn name => lam_SEMAPHORES $ name) lock_ids_terms
           (* globals_names : term list de strings *)
           
-         val semaphores_net_term : term option =
+       (*  val semaphores_net_term : term option =
               case processes of
                 [] => NONE
               | [t] => SOME t
-              | ts => SOME (foldr1 (fn (t1, t2) => Cspm_API.mk_Inter t1 t2) ts)
-          (*val semaphores_net_term : term option =
+              | ts => SOME (foldr1 (fn (t1, t2) => Cspm_API.mk_Inter t1 t2) ts)*)
+
+ 
+          val semaphores_net_term : term option =
             (case lock_ids_terms of
                [] => NONE
              | _ =>
                let
+                 val empty_evs_set = Const (@{const_name bot}, @{typ "evs set"})
                  val multisync_const = Const (@{const_name MultiSync}, 
-                          @{typ "int multiset"} -->               (* type des IDs de verrou *)
-                          (@{typ "int ⇒ (evs) process"} -->       (* type du lambda *)
-                           @{typ "(evs) process"}))               (* type du résultat final *)
-          
-                 val compact_term = multisync_const $ locks_mset_term $ lam_SEMAPHORES
+                                             @{typ "evs set"} --> 
+                                             @{typ "int multiset"} --> 
+                                             @{typ "int ⇒ (evs) process"} --> 
+                                             @{typ "(evs) process"})
+                 val compact_term = multisync_const $ empty_evs_set $ locks_mset_term $ lam_SEMAPHORES
                in
                  SOME compact_term
-               end)*)
+               end)
             
 
          
@@ -2065,7 +2068,7 @@ end;
 
 SYSTEM WellTypedSys
   globals x:‹int› = ‹3 :: int› var1:‹int› = ‹4::int›  var4:‹int› = ‹4::int›
-  locks   l:‹()›    l2:‹()›                                   
+  locks   l:‹()›    l2:‹()›   l3:‹()›                                
   thread t1 : 
          any y : ‹int› = ‹36 :: int› var2 : ‹int›
          actions 
