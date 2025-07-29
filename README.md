@@ -1,4 +1,8 @@
-# IMP Concur ↔ HOL-CSP Integration
+# LambdaLocked – SemanticsUnlocked
+
+*A semantic bridge between IMP Concur and Isabelle/HOL-CSP*
+
+This project explores the formal translation of concurrent imperative programs into CSP process algebra using Isabelle/HOL. By combining typed lambda calculus, process algebra, and static semantics, it unlocks the path to verified concurrency.
 
 This project was developed during an 8-week research internship at the *Laboratoire de Méthodes Formelles (LMF)*, Université Paris-Saclay.
 
