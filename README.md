@@ -1,4 +1,4 @@
-# LambdaLocked – SemanticsUnlocked
+# Lambda Locking Semantics
 
 *A semantic bridge between IMP Concur and Isabelle/HOL-CSP*
 
